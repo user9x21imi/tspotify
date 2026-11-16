@@ -9,12 +9,13 @@ from pathlib import Path
 
 binary = Path(sys.argv[1]).resolve()
 command = [str(binary), "--demo", "--no-splash"]
+height, width = (24, 80) if "--compact" in sys.argv else (48, 140)
 output = []
 seen = threading.Event()
 if os.name == "nt":
     from winpty import PtyProcess
 
-    process = PtyProcess.spawn(subprocess.list2cmdline(command), dimensions=(48, 140))
+    process = PtyProcess.spawn(subprocess.list2cmdline(command), dimensions=(height, width))
 
     def read():
         while process.isalive():
@@ -44,7 +45,7 @@ else:
     import termios
 
     master, slave = pty.openpty()
-    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 48, 140, 0, 0))
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", height, width, 0, 0))
     env = dict(os.environ, TERM="xterm-256color")
     process = subprocess.Popen(command, stdin=slave, stdout=slave, stderr=slave, env=env)
     os.close(slave)

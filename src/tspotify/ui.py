@@ -407,17 +407,21 @@ class App:
     def render(self):
         self.s.erase()
         h, w = self.s.getmaxyx()
-        if h < 30 or w < 78:
+        if h < 24 or w < 78:
             self.spectrum_area = None
             self.progress_area = None
-            self.put(1, 2, "Увеличьте терминал: минимум 78 × 30", 5)
+            self.put(1, 2, "Увеличьте терминал: минимум 78 × 24", 5)
             self.put(3, 2, "q — выход")
             self.s.refresh()
             return
         self.put(0, 2, "● tspotify", 2, True)
         self.put(0, 16, "DEMO / NO AUDIO" if DEMO_MODE else "YOUR MUSIC, LESS NOISE", 5 if DEMO_MODE else 4)
         self.put(0, w - 33, "a Обложка · L Окна · ? Клавиши", 3)
-        player_h = 24 if h >= 58 else (20 if h >= 46 else (16 if h >= 40 else (13 if h >= 35 else 11)))
+        player_h = (
+            8
+            if h < 30
+            else (24 if h >= 58 else (20 if h >= 46 else (16 if h >= 40 else (13 if h >= 35 else 11))))
+        )
         spectrum_h = (6 if h >= 43 else 4) if self.show_spectrum and h >= 35 else 0
         count = 4 if spectrum_h else 3
         available = h - 7 - (count - 1)
@@ -425,7 +429,7 @@ class App:
             "search": 3,
             "player": player_h,
             "spectrum": spectrum_h,
-            "library": max(5, available - 3 - player_h - spectrum_h),
+            "library": max(4, available - 3 - player_h - spectrum_h),
         }
         y = 2
         for name in self.order:
@@ -440,7 +444,11 @@ class App:
         self.put(
             h - 1,
             2,
-            "Enter открыть/слушать  Space Ⅱ  / поиск  f ♥  n/p трек  P весь плейлист  ? помощь  q выход",
+            (
+                "Enter ▶  Space Ⅱ  / поиск  f ♥  +/- звук  ? помощь  q выход"
+                if w < 110
+                else "Enter открыть/слушать  Space Ⅱ  / поиск  f ♥  n/p трек  P весь плейлист  ? помощь  q выход"
+            ),
             3,
         )
         if self.help:
@@ -501,21 +509,35 @@ class App:
         item = self.playback.get("item") or {}
         active = self.playback.get("is_playing", False)
         liked = "spotify:track:" + str(item.get("id")) in self.saved_tracks
-        self.put(y + 2, x, "● ВОСПРОИЗВЕДЕНИЕ" if active else "Ⅱ ПАУЗА", 2 if active else 5, width=width)
-        self.put(y + 4, x, item.get("name", "Выберите музыку в библиотеке"), 1, True, width=width)
-        self.put(y + 5, x, artists(item), 3, width=width)
-        self.put(y + 6, x, (item.get("album") or {}).get("name", ""), 7, width=width)
+        self.put(
+            y + (1 if height < 11 else 2),
+            x,
+            "● ВОСПРОИЗВЕДЕНИЕ" if active else "Ⅱ ПАУЗА",
+            2 if active else 5,
+            width=width,
+        )
+        self.put(
+            y + (2 if height < 11 else 4),
+            x,
+            item.get("name", "Выберите музыку в библиотеке"),
+            1,
+            True,
+            width=width,
+        )
+        self.put(y + (3 if height < 11 else 5), x, artists(item), 3, width=width)
+        self.put(y + (4 if height < 11 else 6), x, (item.get("album") or {}).get("name", ""), 7, width=width)
         progress = (self.playback.get("progress_ms") or 0) + (
             (time.monotonic() - self.updated) * 1000 if active else 0
         )
         total = item.get("duration_ms") or 1
         progress = min(progress, total)
         bar_w = max(8, width - 17)
-        self.progress_area = (y + height - 4, x, bar_w)
+        progress_y = y + height - (3 if height < 11 else 4)
+        self.progress_area = (progress_y, x, bar_w)
         filled = int(bar_w * progress / total)
-        self.put(y + height - 4, x, "━" * filled, 2)
-        self.put(y + height - 4, x + filled, "─" * (bar_w - filled), 11)
-        self.put(y + height - 4, x + bar_w + 2, f"{duration(progress)} / {duration(total)}", 4)
+        self.put(progress_y, x, "━" * filled, 2)
+        self.put(progress_y, x + filled, "─" * (bar_w - filled), 11)
+        self.put(progress_y, x + bar_w + 2, f"{duration(progress)} / {duration(total)}", 4)
         self.put(
             y + height - 2,
             x,

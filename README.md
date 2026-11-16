@@ -136,7 +136,7 @@ If your terminal/font cannot display the dots:
 tspotify --ascii
 ```
 
-Recommended terminals: Windows Terminal with PowerShell, Terminal.app/iTerm2 on macOS, and Konsole/GNOME Terminal/foot on Linux. A minimum of 78 columns × 30 rows is required; a taller window gives the artwork and library more room. The application uses the terminal's background, so existing terminal transparency remains visible. Transparency itself is a terminal setting.
+Recommended terminals: Windows Terminal with PowerShell, Terminal.app/iTerm2 on macOS, and Konsole/GNOME Terminal/foot on Linux. A minimum of 78 columns × 24 rows is required; a taller window gives the artwork and library more room. The application uses the terminal's background, so existing terminal transparency remains visible. Transparency itself is a terminal setting.
 
 ## Real audio spectrum
 

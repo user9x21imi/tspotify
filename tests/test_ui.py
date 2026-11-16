@@ -215,7 +215,9 @@ def test_hiding_spectrum_and_cover_style_toggle(app):
     assert app.art_mode != original
 
 
-@pytest.mark.parametrize("height,width", [(30, 78), (40, 100), (48, 140), (80, 160), (18, 60)])
+@pytest.mark.parametrize(
+    "height,width", [(24, 80), (25, 78), (30, 78), (40, 100), (48, 140), (80, 160), (18, 60)]
+)
 def test_layout_and_live_animation_survive_terminal_resize(app, height, width):
     app.render()
     settle(app)
