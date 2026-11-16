@@ -8,7 +8,9 @@ try {
     Write-Host '+-- installing tspotify ---------------------------------------+' -ForegroundColor Green
     $zipPath = Join-Path $taskTemp $asset
     Invoke-WebRequest "$baseUrl/$asset" -OutFile $zipPath -UseBasicParsing
-    $checksums = (Invoke-WebRequest "$baseUrl/SHA256SUMS.txt" -UseBasicParsing).Content
+    $checksumPath = Join-Path $taskTemp 'SHA256SUMS.txt'
+    Invoke-WebRequest "$baseUrl/SHA256SUMS.txt" -OutFile $checksumPath -UseBasicParsing
+    $checksums = Get-Content $checksumPath -Raw -Encoding UTF8
     $matching = @($checksums -split "`n" | Where-Object { $_ -match ('\s+' + [regex]::Escape($asset) + '\s*$') })
     if ($matching.Count -ne 1) { throw 'Missing or ambiguous release checksum.' }
     $expected = ($matching[0].Trim() -split '\s+')[0]
