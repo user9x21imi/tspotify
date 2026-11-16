@@ -131,3 +131,13 @@ def test_restarted_engine_uses_latest_device_id_in_same_minute_log():
     backend = Backend()
     backend._events()
     assert backend.device_id == "2222-bbbb"
+
+
+def test_volume_acknowledgement_does_not_jump_back_to_stale_cached_value():
+    backend = Backend()
+    backend._snapshot_time = time.monotonic()
+    backend._base = {"device": {"volume_percent": 0}}
+    backend.preferred_volume = 40
+    backend._volume_set_at = time.monotonic()
+    assert backend.playback({})["device"]["volume_percent"] == 40
+    assert backend._base["device"]["volume_percent"] == 0

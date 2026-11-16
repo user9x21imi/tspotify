@@ -117,6 +117,7 @@ class Backend:
         self.muted = muted
         self.external = external
         self.preferred_volume = 35
+        self._volume_set_at = 0.0
         self.device_id = None
         self.on_authorize = on_authorize
         self.process = None
@@ -367,6 +368,8 @@ audio_cache = true
             result.update(
                 is_playing=self.event["playing"], progress_ms=self.event["position"] + elapsed * 1000
             )
+        if time.monotonic() - self._volume_set_at < 7:
+            result["device"] = {**(result.get("device") or {}), "volume_percent": self.preferred_volume}
         return result
 
     def restart(self):

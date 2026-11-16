@@ -208,6 +208,8 @@ class Spotify:
             self.request("PUT", f"me/player/volume?volume_percent={value}&{device}")
             if self.backend:
                 self.backend.preferred_volume = value
+                self.backend._volume_set_at = time.monotonic()
+                self.backend._snapshot_time = 0
                 if value > 0:
                     self.backend.muted = False
                 self.backend.unmute_after_user_volume(value)
