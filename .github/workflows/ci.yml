@@ -1,0 +1,82 @@
+name: Tests and native builds
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-build:
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            platform: linux-x86_64
+          - os: macos-15
+            platform: macos-arm64
+          - os: macos-15-intel
+            platform: macos-x86_64
+          - os: windows-latest
+            platform: windows-x86_64
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install build dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Check source and tests
+        run: python -m ruff check src tests scripts
+      - name: Unit and interface regression tests (no audio/account)
+        run: python -m pytest -q
+      - name: CLI smoke test
+        run: |
+          python -m tspotify --version
+          python -m tspotify doctor
+      - name: Build native terminal application
+        run: >-
+          python -m PyInstaller --noconfirm --clean --onedir --console
+          --name tspotify --paths src
+          --collect-all qrcode --collect-all PIL
+          --hidden-import platformdirs --hidden-import tspotify.ui
+          scripts/frozen_entry.py
+      - name: Smoke-test native binary (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          ./dist/tspotify/tspotify --version
+          ./dist/tspotify/tspotify doctor
+      - name: Smoke-test native binary (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          ./dist/tspotify/tspotify.exe --version
+          ./dist/tspotify/tspotify.exe doctor
+      - name: Package public release files
+        run: python scripts/package_release.py ${{ matrix.platform }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tspotify-${{ matrix.platform }}
+          path: release/*
+          if-no-files-found: error
+
+  python-package:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: python -m pip install build
+      - run: python -m build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-package
+          path: dist/*
+
