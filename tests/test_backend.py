@@ -78,6 +78,19 @@ def test_hidden_terminal_answers_fragmented_cursor_query_once():
     assert replies == ["\x1b[1;1R"]
 
 
+def test_browser_handoff_is_marked_busy_and_errors_are_propagated():
+    backend = Backend()
+
+    def callback(url):
+        assert backend.authorizing.is_set()
+        raise ValueError("invalid callback")
+
+    backend.on_authorize = callback
+    backend._line("Browse to: https://accounts.spotify.com/authorize?state=demo")
+    assert backend.authorization_error == "invalid callback"
+    assert not backend.authorizing.is_set()
+
+
 def test_audio_error_cannot_confirm_playback():
     backend = Backend(muted=True)
     backend.failure = "track"

@@ -200,7 +200,8 @@ audio_cache = true
             import subprocess as sp
             from winpty import PtyProcess
 
-            self.pty = PtyProcess.spawn(sp.list2cmdline(args), dimensions=(30, 100), env=env)
+            # ConPTY wraps console output; keep first-run OAuth URLs on one line.
+            self.pty = PtyProcess.spawn(sp.list2cmdline(args), dimensions=(30, 2000), env=env)
         else:
             import fcntl
             import pty
@@ -229,6 +230,11 @@ audio_cache = true
                 raise RuntimeError("Spotify engine завершился при запуске. Выполните tspotify doctor")
             time.sleep(0.15)
         self._snapshot_time = 0
+        if self.pty:
+            try:
+                self.pty.setwinsize(30, 100)
+            except (AttributeError, OSError):
+                pass
         self._events()
 
     def _read(self):
@@ -366,6 +372,8 @@ audio_cache = true
     def restart(self):
         self.close()
         self.stopped.clear()
+        self.authorization_error = None
+        self.authorizing.clear()
         self.event = {}
         self._base = {}
         self.failure = None
