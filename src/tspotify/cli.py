@@ -141,6 +141,12 @@ def run(args):
                 api.backend = backend
                 print("Подключаю Spotify. Первый запуск может занять несколько секунд…", flush=True)
                 backend.start()
+                # The engine starts silent. Do not let a restored Spotify session
+                # become audible; only an explicit play/volume action restores volume.
+                try:
+                    api.control("pause")
+                except SpotifyError:
+                    pass
             # Import curses only for the UI: doctor, installation and OAuth work without a TTY.
             import curses
             from . import ui

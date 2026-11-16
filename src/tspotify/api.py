@@ -124,6 +124,8 @@ class Spotify:
         return self.last_playback
 
     def device_query(self):
+        if not self.device_id and self.backend and getattr(self.backend, "device_id", None):
+            self.device_id = self.backend.device_id
         if not self.device_id and self.backend:
             device = self.backend.playback({}).get("device") or {}
             if device.get("name") == "tspotify":
@@ -165,6 +167,10 @@ class Spotify:
                 "progress_ms": 0,
                 "device": {"id": self.device_id, "name": "tspotify", "volume_percent": 0},
             }
+            volume = getattr(self.backend, "preferred_volume", 0)
+            if volume > 0 and not getattr(self.backend, "muted", True):
+                self.control("volume", volume)
+                self.last_playback["device"]["volume_percent"] = volume
             return "Воспроизводится: " + item.get("name", "трек")
         deadline = time.monotonic() + 12
         while time.monotonic() < deadline:
@@ -182,6 +188,9 @@ class Spotify:
             value = max(0, min(100, int(value)))
             self.request("PUT", f"me/player/volume?volume_percent={value}&{device}")
             if self.backend:
+                self.backend.preferred_volume = value
+                if value > 0:
+                    self.backend.muted = False
                 self.backend.unmute_after_user_volume(value)
             return f"Громкость: {value}%"
         if command in ("next", "previous"):
@@ -256,6 +265,15 @@ class Spotify:
             page = self.request("GET", f"playlists/{item_id}/tracks?limit=100")
         elif kind == "album":
             page = self.request("GET", f"albums/{item_id}/tracks?limit=50")
+        elif kind == "artist":
+            data = self.request("GET", f"artists/{item_id}/top-tracks")
+            value = {
+                "name": name,
+                "tracks": data.get("tracks", []),
+                "context_uri": f"spotify:artist:{item_id}",
+            }
+            paths.private_json(target, value)
+            return value
         else:
             raise SpotifyError("Этот раздел пока не поддерживает список треков")
         tracks = []

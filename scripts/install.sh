@@ -36,7 +36,8 @@ chmod +x "$app_root/app/tspotify"
 ln -sfn "$app_root/app/tspotify" "$HOME/.local/bin/tspotify"
 case "${SHELL:-}" in
   */zsh) shell_config="$HOME/.zshrc" ;;
-  */bash) shell_config="$HOME/.bashrc" ;;
+  */bash)
+    if [ "$(uname -s)" = Darwin ]; then shell_config="$HOME/.bash_profile"; else shell_config="$HOME/.bashrc"; fi ;;
   *) shell_config="$HOME/.profile" ;;
 esac
 case ":$PATH:" in

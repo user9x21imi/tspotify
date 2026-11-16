@@ -2,6 +2,7 @@ import io
 import tarfile
 import time
 import zipfile
+from types import SimpleNamespace
 
 import pytest
 
@@ -65,6 +66,16 @@ def test_windows_archive_selects_executable():
         archive.writestr("bin/spotify_player.exe", b"windows binary")
         archive.writestr("README", b"ignore")
     assert unpack_engine(data.getvalue(), "windows.zip") == b"windows binary"
+
+
+def test_hidden_terminal_answers_fragmented_cursor_query_once():
+    backend = Backend()
+    replies = []
+    backend.pty = SimpleNamespace(write=replies.append)
+    backend.respond_queries("frame\x1b[")
+    backend.respond_queries("6n")
+    backend.respond_queries("more output")
+    assert replies == ["\x1b[1;1R"]
 
 
 def test_audio_error_cannot_confirm_playback():

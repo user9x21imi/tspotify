@@ -116,6 +116,8 @@ class Backend:
     def __init__(self, muted=False, external=False, on_authorize=None):
         self.muted = muted
         self.external = external
+        self.preferred_volume = 35
+        self.device_id = None
         self.on_authorize = on_authorize
         self.process = None
         self.pty = None
@@ -129,6 +131,7 @@ class Backend:
         self._base = {}
         self._snapshot_time = 0.0
         self.output_tail = ""
+        self._query_tail = ""
 
     def request(self, request, timeout=2):
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
@@ -171,11 +174,11 @@ app_refresh_duration_in_ms = 1000
 playback_refresh_duration_in_ms = 0
 enable_streaming = "{"Never" if self.external else "Always"}"
 enable_media_control = false
-pause_on_startup = true
+pause_on_startup = false
 [device]
 name = "tspotify"
 device_type = "speaker"
-volume = {0 if self.muted else 35}
+volume = 0
 bitrate = 160
 audio_cache = true
 '''
@@ -218,6 +221,7 @@ audio_cache = true
                 raise RuntimeError("Spotify engine завершился при запуске. Выполните tspotify doctor")
             time.sleep(0.15)
         self._snapshot_time = 0
+        self._events()
 
     def _read(self):
         buffer = ""
@@ -228,6 +232,7 @@ audio_cache = true
                 )
                 if not chunk:
                     return
+                self.respond_queries(chunk)
                 self.output_tail = (self.output_tail + chunk)[-6000:]
                 buffer += chunk
                 while "\n" in buffer:
@@ -237,6 +242,18 @@ audio_cache = true
                     buffer = buffer[-4000:]
             except (OSError, EOFError):
                 return
+
+    def respond_queries(self, chunk):
+        # A PTY supplies a terminal device, not an emulator. Crossterm asks for
+        # cursor position during startup; ignoring CPR makes the engine exit
+        # after briefly opening its socket, which looks like a successful start.
+        data = self._query_tail + chunk
+        for _ in range(data.count("\x1b[6n")):
+            if self.pty:
+                self.pty.write("\x1b[1;1R")
+            elif self.master is not None:
+                os.write(self.master, b"\x1b[1;1R")
+        self._query_tail = data[-3:]
 
     def _line(self, line):
         match = re.search(r"Browse to: (https://accounts\.spotify\.com/authorize\?[^\s\x1b]+)", line)
@@ -251,6 +268,13 @@ audio_cache = true
         latest = max(files, key=lambda p: p.stat().st_mtime)
         try:
             with latest.open("rb") as stream:
+                if self.device_id is None:
+                    header = stream.read(20000).decode(errors="replace")
+                    match = re.search(
+                        r"Initializing a new integrated player with device_id=([0-9a-f-]+)", header
+                    )
+                    if match:
+                        self.device_id = match[1]
                 stream.seek(max(0, latest.stat().st_size - 18000))
                 text = stream.read().decode(errors="replace")
         except OSError:

@@ -41,11 +41,14 @@ jobs:
         run: |
           python -m tspotify --version
           python -m tspotify doctor
+      - name: Verify streaming engine for this OS (no account or audio)
+        run: python -c "from tspotify.backend import engine_path; import subprocess; subprocess.run([str(engine_path()), '--version'], check=True)"
       - name: Build native terminal application
         run: >-
           python -m PyInstaller --noconfirm --clean --onedir --console
           --name tspotify --paths src
           --collect-all qrcode --collect-all PIL
+          --collect-all soundcard
           --hidden-import platformdirs --hidden-import tspotify.ui
           scripts/frozen_entry.py
       - name: Smoke-test native binary (Unix)

@@ -118,11 +118,12 @@ class App:
         self.next_color = 20
         self.history = []
         self.search_y = 2
+        self.default_background = -1
         try:
             curses.start_color()
             curses.use_default_colors()
         except curses.error:
-            pass
+            self.default_background = 0
         for i, fg, bg in [
             (1, 252, -1),
             (2, 78, -1),
@@ -149,7 +150,9 @@ class App:
             return
 
         def adapt(index):
-            if index < 0 or index < curses.COLORS:
+            if index < 0:
+                return self.default_background
+            if index < curses.COLORS:
                 return index
             if index >= 232:
                 return 7 if index > 245 else 0
@@ -833,7 +836,7 @@ class App:
             if kind == "track":
                 self.notice = "Запускаю и проверяю трек…"
                 self.submit("command", API.start, item)
-            elif kind in ("playlist", "album"):
+            elif kind in ("playlist", "album", "artist"):
                 self.notice = "Загрузка треков…"
                 self.submit("open", open_context, kind, item["id"], item.get("name", "Треки"))
             else:

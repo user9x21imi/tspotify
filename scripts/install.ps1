@@ -28,7 +28,7 @@ try {
         Move-Item $appPath $previous
     }
     Move-Item $incoming $appPath
-    $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+    $userPath = [string][Environment]::GetEnvironmentVariable('Path', 'User')
     if (($userPath -split ';') -notcontains $appPath) {
         [Environment]::SetEnvironmentVariable('Path', ($userPath.TrimEnd(';') + ';' + $appPath), 'User')
     }

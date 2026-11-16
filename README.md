@@ -1,9 +1,9 @@
 <p align="center"><img src="docs/assets/banner.svg" alt="tspotify — your music, less noise" width="100%"></p>
 
 <p align="center">
-<a href="https://github.com/user9x21imi/tspotify/releases/latest"><img src="docs/assets/linux.svg" width="212" alt="Download for Linux"></a>
-<a href="https://github.com/user9x21imi/tspotify/releases/latest"><img src="docs/assets/macos.svg" width="212" alt="Download for macOS"></a>
-<a href="https://github.com/user9x21imi/tspotify/releases/latest"><img src="docs/assets/windows.svg" width="212" alt="Download for Windows"></a>
+<a href="https://github.com/user9x21imi/tspotify/releases/latest/download/tspotify-linux-x86_64.zip"><img src="docs/assets/linux.svg" width="212" alt="Download for Linux"></a>
+<a href="https://github.com/user9x21imi/tspotify/releases/latest/download/tspotify-macos-arm64.zip"><img src="docs/assets/macos.svg" width="212" alt="Download for macOS"></a>
+<a href="https://github.com/user9x21imi/tspotify/releases/latest/download/tspotify-windows-x86_64.zip"><img src="docs/assets/windows.svg" width="212" alt="Download for Windows"></a>
 </p>
 
 <p align="center">
@@ -50,6 +50,8 @@ curl -fsSL https://raw.githubusercontent.com/user9x21imi/tspotify/main/scripts/i
 ```powershell
 irm https://raw.githubusercontent.com/user9x21imi/tspotify/main/scripts/install.ps1 | iex
 ```
+
+macOS Intel: [download x86_64](https://github.com/user9x21imi/tspotify/releases/latest/download/tspotify-macos-x86_64.zip).
 
 Then run `tspotify`. Release archives and installer downloads are checked against `SHA256SUMS.txt`.
 

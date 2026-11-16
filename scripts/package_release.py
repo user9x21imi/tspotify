@@ -14,6 +14,7 @@ if not source.is_dir():
     raise SystemExit("Build dist/tspotify with PyInstaller first")
 for name in ("LICENSE", "NOTICE", "README.md", "CHANGELOG.md"):
     shutil.copy2(root / name, source / name)
+shutil.copytree(root / "docs/licenses", source / "licenses", dirs_exist_ok=True)
 if args.platform.startswith("macos"):
     launch = source / "Start tspotify.command"
     launch.write_text('#!/bin/sh\ncd "$(dirname "$0")"\nexec ./tspotify "$@"\n', encoding="utf-8")
