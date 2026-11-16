@@ -63,12 +63,12 @@ def unpack_engine(data, suffix):
     if suffix.endswith(".zip"):
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
             entries = [x for x in archive.infolist() if Path(x.filename).name == name and not x.is_dir()]
-            if len(entries) != 1 or entries[0].file_size > 200_000_000:
+            if len(entries) != 1 or entries[0].file_size > 600_000_000:
                 raise RuntimeError("Неверный архив движка")
             return archive.read(entries[0])
     with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
         entries = [x for x in archive.getmembers() if Path(x.name).name == name and x.isfile()]
-        if len(entries) != 1 or entries[0].size > 200_000_000:
+        if len(entries) != 1 or entries[0].size > 600_000_000:
             raise RuntimeError("Неверный архив движка")
         return archive.extractfile(entries[0]).read()
 
@@ -92,7 +92,7 @@ def engine_path(install=True):
     if not install:
         return None
     suffix, expected = asset_for()
-    print(f"Загружаю проверенный Spotify engine {VERSION} ({suffix})…", flush=True)
+    print(f"Downloading verified Spotify engine {VERSION} ({suffix})...", flush=True)
     url = f"https://github.com/aome510/spotify-player/releases/download/v{VERSION}/spotify_player-{suffix}"
     with httpx.stream("GET", url, follow_redirects=True, timeout=120) as response:
         response.raise_for_status()
@@ -132,6 +132,9 @@ class Backend:
         self._snapshot_time = 0.0
         self.output_tail = ""
         self._query_tail = ""
+        self.authorizing = threading.Event()
+        self.authorization_error = None
+        self._authorization_started = 0.0
 
     def request(self, request, timeout=2):
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
@@ -213,7 +216,12 @@ audio_cache = true
             self.master = master
         threading.Thread(target=self._read, daemon=True, name="spotify-engine-output").start()
         deadline = time.monotonic() + 75
-        while not self.ready():
+        while not self.ready() or self.authorizing.is_set():
+            if self.authorization_error:
+                self.close()
+                raise RuntimeError(self.authorization_error)
+            if self.authorizing.is_set():
+                deadline = max(deadline, self._authorization_started + 180)
             if time.monotonic() > deadline:
                 self.close()
                 raise RuntimeError("Движок Spotify не запустился. Проверьте вход: tspotify login")
@@ -258,7 +266,14 @@ audio_cache = true
     def _line(self, line):
         match = re.search(r"Browse to: (https://accounts\.spotify\.com/authorize\?[^\s\x1b]+)", line)
         if match and self.on_authorize:
-            self.on_authorize(match.group(1))
+            self.authorizing.set()
+            self._authorization_started = time.monotonic()
+            try:
+                self.on_authorize(match.group(1))
+            except (OSError, ValueError, RuntimeError, httpx.HTTPError) as error:
+                self.authorization_error = str(error)
+            finally:
+                self.authorizing.clear()
         # Runtime logs go to the engine cache, so stream the log too via playback().
 
     def _events(self):

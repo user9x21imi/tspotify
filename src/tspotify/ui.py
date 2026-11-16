@@ -1,6 +1,7 @@
 """Curses interface. The same dotted renderer runs in Windows Terminal, macOS and Linux."""
 
 import concurrent.futures
+from collections import OrderedDict
 import curses
 import json
 import math
@@ -61,10 +62,15 @@ def open_context(kind, item_id, name):
 class App:
     def __init__(self, screen):
         self.s = screen
+        try:
+            self.s.encoding = "utf-8"
+        except (AttributeError, TypeError):
+            pass
         self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+        self.art_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2)
         self.events = queue.Queue()
         self.pending = set()
-        self.thumbnails = {}
+        self.thumbnails = OrderedDict()
         self.playback = {}
         self.updated = time.monotonic()
         self.art_url = ""
@@ -84,7 +90,7 @@ class App:
         self.cover_right = False
         self.show_spectrum = True
         try:
-            layout = json.loads(CONFIG.read_text())
+            layout = json.loads(CONFIG.read_text(encoding="utf-8"))
             if sorted(layout.get("order", [])) == sorted(DEFAULT_ORDER):
                 self.order = layout["order"]
             self.cover_right = bool(layout.get("cover_right", False))
@@ -99,7 +105,7 @@ class App:
         self.saved_tracks = cached("SavedTracks", {})
         self.favorite_changes = {}
         try:
-            self.favorite_changes = json.loads((ART / "favorites.json").read_text())
+            self.favorite_changes = json.loads((ART / "favorites.json").read_text(encoding="utf-8"))
             for uri, track in self.favorite_changes.items():
                 if track is None:
                     self.saved_tracks.pop(uri, None)
@@ -172,7 +178,8 @@ class App:
             except Exception as exc:
                 self.events.put((key, None, str(exc)))
 
-        self.pool.submit(run)
+        pool = self.art_pool if key.startswith("thumb:") or key == "cover" else self.pool
+        pool.submit(run)
 
     def library(self, section):
         self.section = section
@@ -199,6 +206,8 @@ class App:
             self.pending.discard(key)
             if key.startswith("thumb:"):
                 self.thumbnails[key[6:]] = value or []
+                while len(self.thumbnails) > 128:
+                    self.thumbnails.popitem(last=False)
                 continue
             if error:
                 if key == "poll" and API.backend and ("Connection refused" in error or "timed out" in error):
@@ -275,7 +284,9 @@ class App:
                 else:
                     self.saved_tracks[uri] = track
                 self.favorite_changes[uri] = None if was_liked else track
-                (ART / "favorites.json").write_text(json.dumps(self.favorite_changes, ensure_ascii=False))
+                (ART / "favorites.json").write_text(
+                    json.dumps(self.favorite_changes, ensure_ascii=False), encoding="utf-8"
+                )
                 self.notice = "♡ Удалено из избранного" if was_liked else "♥ Добавлено в избранное"
                 if self.section == "Любимые":
                     self.items = [("track", x) for x in self.saved_tracks.values()]
@@ -580,6 +591,7 @@ class App:
                 key = kind + ":" + data["id"]
                 image = self.thumbnails.get(key)
                 if image:
+                    self.thumbnails.move_to_end(key)
                     if ASCII_ONLY:
                         self.put(yy + 1, 5, "[ART]", 3)
                     else:
@@ -904,3 +916,4 @@ class App:
         finally:
             self.audio.close()
             self.pool.shutdown(wait=False, cancel_futures=True)
+            self.art_pool.shutdown(wait=False, cancel_futures=True)

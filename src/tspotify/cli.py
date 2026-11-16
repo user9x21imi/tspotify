@@ -44,7 +44,7 @@ def single_instance():
         stream.close()
 
 
-def engine_authorize(url, qr=False):
+def engine_authorize(url, qr=False, ready=None):
     print("\nSpotify просит отдельно разрешить встроенное воспроизведение.", flush=True)
     if qr:
         import httpx
@@ -54,7 +54,11 @@ def engine_authorize(url, qr=False):
         image.add_data(url)
         image.make(fit=True)
         image.print_ascii(invert=True)
-        pasted = input("После входа на телефоне вставьте полный адрес возврата: ").strip()
+        pasted = input(
+            "Вставьте адрес возврата с телефона, или Enter после входа в браузере компьютера: "
+        ).strip()
+        if not pasted or (ready and ready()):
+            return
         parsed = urlsplit(pasted)
         if parsed.scheme != "http" or parsed.hostname != "127.0.0.1" or parsed.port != 8989:
             raise ValueError("Ожидается адрес возврата http://127.0.0.1:8989/…")
@@ -146,7 +150,8 @@ def run(args):
                 print("Spotify Connect:", selected["name"], flush=True)
             if not api.external:
                 backend = Backend(
-                    muted=args.muted, on_authorize=lambda url: engine_authorize(url, qr=args.qr)
+                    muted=args.muted,
+                    on_authorize=lambda url: engine_authorize(url, qr=args.qr, ready=lambda: backend.ready()),
                 )
                 api.backend = backend
                 print("Подключаю Spotify. Первый запуск может занять несколько секунд…", flush=True)
@@ -164,7 +169,6 @@ def run(args):
             ui.API = api
             ui.ASCII_ONLY = args.ascii
             ui.NO_SPLASH = args.no_splash
-            locale.setlocale(locale.LC_ALL, "")
             curses.wrapper(lambda screen: ui.App(screen).run())
     finally:
         # Stop our own stream even when an exception or Ctrl+C closes the interface.
@@ -176,6 +180,13 @@ def run(args):
 
 def main(argv=None):
     os.umask(0o077)
+    candidates = (".UTF-8", "", "C") if os.name == "nt" else ("", "C.UTF-8", "en_US.UTF-8", "C")
+    for candidate in candidates:
+        try:
+            locale.setlocale(locale.LC_ALL, candidate)
+            break
+        except locale.Error:
+            continue
     if os.name == "nt":
         for stream in (sys.stdout, sys.stderr):
             if hasattr(stream, "reconfigure"):

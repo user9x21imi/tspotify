@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import threading
+import tempfile
 from urllib.parse import urlsplit
 
 import httpx
@@ -38,9 +39,14 @@ def cover(url, width=128, height=128):
                 data.extend(chunk)
                 if len(data) > 8 * 1024 * 1024:
                     raise RuntimeError("Обложка слишком большая")
-        temp = target.with_suffix(".download")
-        temp.write_bytes(data)
-        temp.replace(target)
+        with tempfile.NamedTemporaryFile(
+            dir=paths.CACHE, prefix="image-", suffix=".download", delete=False
+        ) as stream:
+            stream.write(data)
+            temporary = stream.name
+        from pathlib import Path
+
+        Path(temporary).replace(target)
     with Image.open(io.BytesIO(data)) as image:
         image = image.convert("RGB").resize((width, height), Image.Resampling.LANCZOS)
         pixels = list(getattr(image, "get_flattened_data", image.getdata)())

@@ -54,6 +54,7 @@ def parse_callback(url, expected_state):
 
 def save_token(data, previous=None):
     data = dict(data)
+    data.setdefault("scope", (previous or {}).get("scope", SCOPES))
     if previous and not data.get("refresh_token"):
         data["refresh_token"] = previous.get("refresh_token")
     data["expires_at"] = datetime.fromtimestamp(

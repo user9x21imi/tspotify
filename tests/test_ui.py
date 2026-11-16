@@ -74,6 +74,7 @@ def app(monkeypatch):
     value.test_calls = calls
     yield value
     value.pool.shutdown(wait=True, cancel_futures=True)
+    value.art_pool.shutdown(wait=True, cancel_futures=True)
 
 
 def settle(app):
@@ -147,6 +148,17 @@ def test_favorite_button_uses_server_confirmed_toggle(app):
     settle(app)
     assert app.test_calls[-1] == ("favorite", ("t",))
     assert "spotify:track:t" not in app.saved_tracks
+
+
+def test_non_ascii_favorite_names_are_saved_as_utf8(app, monkeypatch):
+    import json
+
+    app.playback["item"]["name"] = "Тихая музыка"
+    monkeypatch.setattr(ui.API, "toggle_favorite", lambda *args: True)
+    app.key("f")
+    settle(app)
+    value = json.loads((ui.ART / "favorites.json").read_text(encoding="utf-8"))
+    assert value["spotify:track:t"]["name"] == "Тихая музыка"
 
 
 @pytest.mark.parametrize("key,section", [("1", "Плейлисты"), ("2", "Любимые"), ("3", "Альбомы")])
