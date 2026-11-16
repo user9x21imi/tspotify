@@ -71,6 +71,8 @@ class App:
         self.events = queue.Queue()
         self.pending = set()
         self.thumbnails = OrderedDict()
+        self.library_data = {}
+        self.library_requested = set()
         self.playback = {}
         self.updated = time.monotonic()
         self.art_url = ""
@@ -185,15 +187,20 @@ class App:
         self.section = section
         self.selected = 0
         self.history = []
+        if section in self.library_data:
+            self.items = self.library_data[section]
+            return
         if section == "Плейлисты":
             self.items = [("playlist", x["Playlist"]) for x in cached("Playlists", []) if "Playlist" in x]
         elif section == "Любимые":
             self.items = [("track", x) for x in self.saved_tracks.values()]
         else:
             self.items = [("album", x) for x in cached("SavedAlbums", [])]
-        if not self.items:
-            self.notice = "Загружаю библиотеку…"
-            self.submit("library", API.library, section)
+        if (not self.items or section != "Любимые") and section not in self.library_requested:
+            if not self.items:
+                self.notice = "Загружаю библиотеку…"
+            self.library_requested.add(section)
+            self.submit("library:" + section, API.library, section)
 
     def drain(self):
         changed = False
@@ -210,6 +217,8 @@ class App:
                     self.thumbnails.popitem(last=False)
                 continue
             if error:
+                if key.startswith("library:"):
+                    self.library_requested.discard(key[8:])
                 if key == "poll" and API.backend and ("Connection refused" in error or "timed out" in error):
                     self.notice = "Переподключаю фоновый плеер…"
                     self.submit("reconnect", API.backend.restart)
@@ -219,10 +228,32 @@ class App:
             if key == "reconnect":
                 self.notice = "Плеер подключён"
                 continue
-            if key == "library":
+            if key.startswith("library:"):
                 section, items = value
+                self.library_data[section] = items
+                if section == "Любимые":
+                    self.saved_tracks = {"spotify:track:" + item["id"]: item for _, item in items}
+                    for uri, change in self.favorite_changes.items():
+                        if change is None:
+                            self.saved_tracks.pop(uri, None)
+                        else:
+                            self.saved_tracks[uri] = change
+                    items = [("track", item) for item in self.saved_tracks.values()]
+                    self.library_data[section] = items
+                for kind, item in items:
+                    thumb_key = kind + ":" + item["id"]
+                    if item.get("images") and self.thumbnails.get(thumb_key) == []:
+                        self.thumbnails.pop(thumb_key, None)
                 if self.section == section:
+                    previous = (
+                        self.items[self.selected][1].get("id")
+                        if self.items and self.selected < len(self.items)
+                        else None
+                    )
                     self.items = items
+                    self.selected = next(
+                        (i for i, (_, item) in enumerate(items) if item.get("id") == previous), 0
+                    )
                     self.notice = f"Элементов: {len(items)}"
                 continue
             if key == "poll":
@@ -291,6 +322,7 @@ class App:
                 if self.section == "Любимые":
                     self.items = [("track", x) for x in self.saved_tracks.values()]
                     self.selected = max(0, min(self.selected, len(self.items) - 1))
+                self.library_data.pop("Любимые", None)
         return changed
 
     def put(self, y, x, text, color=1, bold=False, width=None):
@@ -622,7 +654,7 @@ class App:
                     self.put(yy + 1, 5, "······", 11)
                     thumb_jobs = sum(x.startswith("thumb:") for x in self.pending)
                     if key not in self.thumbnails and thumb_jobs < 2:
-                        self.submit("thumb:" + key, thumbnail, kind, data["id"])
+                        self.submit("thumb:" + key, self.load_thumbnail, kind, data)
                 tx = 13
             owner = data.get("owner") or [""]
             by = artists(data) or (
@@ -647,6 +679,12 @@ class App:
             self.put(yy, w - 14, label, 6 if selected else 4)
         if not self.items:
             self.put(y + 2, 4, "Нет треков · / поиск · 1/2/3 библиотека", 4)
+
+    def load_thumbnail(self, kind, item):
+        images = item.get("images") or (item.get("album") or {}).get("images") or []
+        if images:
+            return cover(images[-1]["url"], 24, 24)
+        return thumbnail(kind, item["id"])
 
     def render_layout(self, h, w):
         bw = min(w - 4, 78)

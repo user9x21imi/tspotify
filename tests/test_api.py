@@ -165,3 +165,22 @@ def test_expired_rate_limit_allows_request(api):
     api.rate_until = time.monotonic() - 1
     mock(api, lambda req: httpx.Response(200, json={"ok": True}))
     assert api.request("GET", "me") == {"ok": True}
+
+
+def test_first_play_waits_for_connect_device_registration(api, monkeypatch):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return (
+            httpx.Response(404, json={"error": {"message": "Device not found"}})
+            if len(calls) == 1
+            else httpx.Response(204)
+        )
+
+    mock(api, handler)
+    monkeypatch.setattr("tspotify.api.time.sleep", lambda seconds: None)
+    api.device_id = "device"
+    api.backend = SimpleNamespace(_events=lambda: None, wait_playing=lambda *a, **k: None)
+    assert "Воспроизводится" in api.start({"id": "track"})
+    assert len(calls) == 2

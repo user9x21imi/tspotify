@@ -11,7 +11,9 @@ from . import auth, paths
 
 
 class SpotifyError(RuntimeError):
-    pass
+    def __init__(self, message, status=None):
+        self.status = status
+        super().__init__(message)
 
 
 class RateLimited(SpotifyError):
@@ -82,7 +84,9 @@ class Spotify:
                 message = ""
             if response.status_code == 403:
                 message = message or "Нужен Spotify Premium и разрешение на управление воспроизведением"
-            raise SpotifyError(f"Spotify {response.status_code}: {message or 'запрос отклонён'}")
+            raise SpotifyError(
+                f"Spotify {response.status_code}: {message or 'запрос отклонён'}", status=response.status_code
+            )
         return response.json() if response.content else None
 
     def devices(self):
@@ -158,7 +162,14 @@ class Spotify:
         if self.backend and not self.external:
             self.backend._events()
         started = time.monotonic()
-        self.request("PUT", "me/player/play?" + self.device_query(), body)
+        for attempt in range(3):
+            try:
+                self.request("PUT", "me/player/play?" + self.device_query(), body)
+                break
+            except SpotifyError as error:
+                if error.status != 404 or not self.backend or self.external or attempt == 2:
+                    raise
+                time.sleep(1.5)  # Connect discovery may lag the local control socket.
         if self.backend and not self.external:
             self.backend.wait_playing(track_id, since=started, timeout=25)
             self.last_playback = {

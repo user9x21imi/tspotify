@@ -62,7 +62,12 @@ def app(monkeypatch):
         control=record("control", "done"),
         context=record("context", {"name": "Mix", "tracks": [track], "context_uri": "spotify:playlist:p"}),
         toggle_favorite=record("favorite", False),
-        library=record("library", ("Плейлисты", [])),
+        library=lambda section: (
+            section,
+            [("playlist", {"id": "p", "name": "Playlist"})]
+            if section == "Плейлисты"
+            else [("album", {"id": "a", "name": "Album"})],
+        ),
         search=record("search", {"tracks": [track]}),
         backend=SimpleNamespace(restart=lambda: True),
         playback=lambda: {"item": track, "device": {"volume_percent": 0}},
@@ -253,3 +258,24 @@ def test_spectrum_interpolates_instead_of_jumping_to_new_target(app):
     app.smooth_time = time.monotonic() - 0.03
     app.spectrum(1, 1, 4, 100)
     assert old * 0.8 < app.smooth_bars[0] < old
+
+
+def test_private_playlist_cover_uses_authenticated_library_image_url(app, monkeypatch):
+    calls = []
+    monkeypatch.setattr(ui, "cover", lambda url, *args: calls.append(url) or [[(1, 2, 3)]])
+    monkeypatch.setattr(
+        ui, "thumbnail", lambda *args: pytest.fail("public oEmbed not needed for private artwork")
+    )
+    app.load_thumbnail("playlist", {"id": "private", "images": [{"url": "https://i.scdn.co/image/private"}]})
+    assert calls == ["https://i.scdn.co/image/private"]
+
+
+def test_library_refresh_clamps_selection_when_remote_list_shrinks(app):
+    settle(app)
+    app.items = [("playlist", {"id": "p", "name": "One"}), ("playlist", {"id": "gone", "name": "Removed"})]
+    app.selected = 1
+    app.events.put(("library:Плейлисты", ("Плейлисты", [("playlist", {"id": "p", "name": "One"})]), None))
+    app.drain()
+    assert app.selected == 0
+    app.key("\n")
+    settle(app)
