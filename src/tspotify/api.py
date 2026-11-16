@@ -148,12 +148,19 @@ class Spotify:
         return "device_id=" + quote(self.device_id, safe="")
 
     def start(self, item, context_uri=None):
+        item = dict(item)
+        if not item.get("duration_ms") and isinstance(item.get("duration"), dict):
+            item["duration_ms"] = (
+                item["duration"].get("secs", 0) * 1000 + item["duration"].get("nanos", 0) // 1000000
+            )
         track_id = item.get("id")
         if not track_id:
             raise SpotifyError("У трека нет Spotify ID")
         uri = "spotify:track:" + track_id
         album = item.get("album") or {}
         context_uri = context_uri or item.get("_context_uri")
+        if context_uri and context_uri.startswith("spotify:artist:"):
+            context_uri = None  # Artist contexts do not support a track offset.
         if not context_uri and album.get("id"):
             context_uri = "spotify:album:" + album["id"]
         body = {"context_uri": context_uri, "offset": {"uri": uri}} if context_uri else {"uris": [uri]}
@@ -172,6 +179,7 @@ class Spotify:
                 time.sleep(1.5)  # Connect discovery may lag the local control socket.
         if self.backend and not self.external:
             self.backend.wait_playing(track_id, since=started, timeout=25)
+            self.backend._snapshot_time = 0
             self.last_playback = {
                 "item": item,
                 "is_playing": True,
