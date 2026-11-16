@@ -55,6 +55,8 @@ macOS Intel: [download x86_64](https://github.com/user9x21imi/tspotify/releases/
 
 Then run `tspotify`. Release archives and installer downloads are checked against `SHA256SUMS.txt`.
 
+Want to preview the interface before signing in? `tspotify --demo` is completely offline and never plays audio.
+
 <details><summary>Python / source installation</summary>
 
 Requires Python 3.11 or later. Install in an isolated environment:
@@ -85,6 +87,8 @@ For QR sign-in:
 ```sh
 tspotify login --qr
 ```
+
+For a first run that also uses QR for any separate integrated-playback approval, run `tspotify --qr`.
 
 Scan the code, approve Spotify access, and **paste the full callback address from your phone into the terminal**. Spotify's loopback callback points to your computer; a phone cannot finish that redirect automatically. Browser sign-in on the computer is the fastest route.
 

@@ -89,6 +89,8 @@ def doctor():
 def parser():
     value = argparse.ArgumentParser(prog="tspotify", description="Spotify in your terminal, drawn with dots.")
     value.add_argument("--version", action="version", version="tspotify " + __version__)
+    value.add_argument("--demo", action="store_true", help="offline UI preview without account or audio")
+    value.add_argument("--qr", action="store_true", help="use QR/manual callback for first-run sign-in")
     value.add_argument("--ascii", action="store_true", help="portable ASCII artwork and borders")
     value.add_argument("--no-splash", action="store_true", help="skip the two-second dotted splash")
     value.add_argument("--muted", action="store_true", help="start the integrated engine at zero volume")
@@ -98,7 +100,7 @@ def parser():
     sub = value.add_subparsers(dest="command")
     login_parser = sub.add_parser("login", help="authorize Spotify in a browser or via QR")
     login_parser.add_argument(
-        "--qr", action="store_true", help="show QR; paste the callback URL from your phone"
+        "--qr", dest="login_qr", action="store_true", help="show QR; paste the callback URL from your phone"
     )
     sub.add_parser("doctor", help="show diagnostics without printing tokens")
     sub.add_parser("devices", help="list available Spotify Connect devices")
@@ -108,6 +110,11 @@ def parser():
 
 def run(args):
     paths.prepare()
+    if args.demo:
+        from .demo import run as demo_run
+
+        demo_run(args)
+        return
     if args.command == "doctor":
         doctor()
         return
@@ -115,12 +122,12 @@ def run(args):
         print(engine_path())
         return
     if args.command == "login":
-        auth.login(qr=args.qr)
+        auth.login(qr=args.qr or args.login_qr)
         return
     try:
         auth.access_token()
     except auth.LoginRequired:
-        auth.login()
+        auth.login(qr=args.qr)
     api = Spotify()
     backend = None
     try:
@@ -138,7 +145,9 @@ def run(args):
             if selected:
                 print("Spotify Connect:", selected["name"], flush=True)
             if not api.external:
-                backend = Backend(muted=args.muted, on_authorize=engine_authorize)
+                backend = Backend(
+                    muted=args.muted, on_authorize=lambda url: engine_authorize(url, qr=args.qr)
+                )
                 api.backend = backend
                 print("Подключаю Spotify. Первый запуск может занять несколько секунд…", flush=True)
                 backend.start()

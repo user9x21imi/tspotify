@@ -61,6 +61,12 @@ jobs:
         run: |
           ./dist/tspotify/tspotify.exe --version
           ./dist/tspotify/tspotify.exe doctor
+      - name: Exercise native terminal rendering and q (Unix, offline)
+        if: runner.os != 'Windows'
+        run: python scripts/smoke_terminal.py dist/tspotify/tspotify
+      - name: Exercise native terminal rendering and q (Windows, offline)
+        if: runner.os == 'Windows'
+        run: python scripts/smoke_terminal.py dist/tspotify/tspotify.exe
       - name: Package public release files
         run: python scripts/package_release.py ${{ matrix.platform }}
       - uses: actions/upload-artifact@v4

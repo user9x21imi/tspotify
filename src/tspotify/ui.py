@@ -25,6 +25,7 @@ PANEL_NAMES = {
 API = None
 ASCII_ONLY = False
 NO_SPLASH = False
+DEMO_MODE = False
 
 
 def cached(name, default):
@@ -372,11 +373,11 @@ class App:
                         + round(rgb[2] / 255 * 5)
                     )
                     key = ("dot", idx)
-                    if key not in self.colors:
+                    if key not in self.colors and self.next_color < curses.COLOR_PAIRS:
                         self.init_pair(self.next_color, idx, -1)
                         self.colors[key] = self.next_color
                         self.next_color += 1
-                    self.put(y + yy, x + xx, chr(0x2800 + bits), self.colors[key])
+                    self.put(y + yy, x + xx, chr(0x2800 + bits), self.colors.get(key, 3))
                 else:
                     self.put(y + yy, x + xx, " ")
 
@@ -403,7 +404,7 @@ class App:
             self.s.refresh()
             return
         self.put(0, 2, "● tspotify", 2, True)
-        self.put(0, 16, "YOUR MUSIC, LESS NOISE", 4)
+        self.put(0, 16, "DEMO / NO AUDIO" if DEMO_MODE else "YOUR MUSIC, LESS NOISE", 5 if DEMO_MODE else 4)
         self.put(0, w - 33, "a Обложка · L Окна · ? Клавиши", 3)
         player_h = 24 if h >= 58 else (20 if h >= 46 else (16 if h >= 40 else (13 if h >= 35 else 11)))
         spectrum_h = (6 if h >= 43 else 4) if self.show_spectrum and h >= 35 else 0
