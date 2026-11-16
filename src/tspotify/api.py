@@ -124,7 +124,7 @@ class Spotify:
         return self.last_playback
 
     def device_query(self):
-        if not self.device_id and self.backend and getattr(self.backend, "device_id", None):
+        if self.backend and getattr(self.backend, "device_id", None):
             self.device_id = self.backend.device_id
         if not self.device_id and self.backend:
             device = self.backend.playback({}).get("device") or {}
@@ -211,7 +211,7 @@ class Spotify:
         return "Команда выполнена"
 
     def favorite(self, track_id, unlike=False):
-        self.request("DELETE" if unlike else "PUT", "me/tracks?ids=" + quote(track_id, safe=""))
+        self.request("DELETE" if unlike else "PUT", "me/tracks", {"ids": [track_id]})
 
     def toggle_favorite(self, track_id):
         saved = self.request("GET", "me/tracks/contains?ids=" + quote(track_id, safe=""))

@@ -512,6 +512,8 @@ class App:
             width=width,
         )
         if height >= 17:
+            device = (self.playback.get("device") or {}).get("name", "tspotify")
+            self.put(y + 8, x, "Устройство: " + device, 4, width=width)
             self.put(
                 y + 9,
                 x,

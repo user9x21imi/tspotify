@@ -269,12 +269,15 @@ audio_cache = true
         try:
             with latest.open("rb") as stream:
                 if self.device_id is None:
-                    header = stream.read(20000).decode(errors="replace")
-                    match = re.search(
-                        r"Initializing a new integrated player with device_id=([0-9a-f-]+)", header
+                    stream.seek(max(0, latest.stat().st_size - 200000))
+                    header = stream.read().decode(errors="replace")
+                    matches = list(
+                        re.finditer(
+                            r"Initializing a new integrated player with device_id=([0-9a-f-]+)", header
+                        )
                     )
-                    if match:
-                        self.device_id = match[1]
+                    if matches:
+                        self.device_id = matches[-1][1]
                 stream.seek(max(0, latest.stat().st_size - 18000))
                 text = stream.read().decode(errors="replace")
         except OSError:
@@ -335,7 +338,9 @@ audio_cache = true
                 pass
         result = dict(self._base or fallback)
         if self.event and (fallback.get("item") or {}).get("id") == self.event.get("track_id"):
-            result = dict(fallback)
+            base_item = self._base.get("item") or {}
+            if base_item.get("id") != self.event.get("track_id") or not base_item.get("album"):
+                result = dict(fallback)
         if self.event and (result.get("item") or {}).get("id") == self.event.get("track_id"):
             elapsed = time.monotonic() - self.event["at"] if self.event["playing"] else 0
             result.update(
@@ -349,6 +354,7 @@ audio_cache = true
         self.event = {}
         self._base = {}
         self.failure = None
+        self.device_id = None
         self.process = None
         self.pty = None
         self.start()

@@ -9,6 +9,7 @@ import shutil
 import sys
 import webbrowser
 from urllib.parse import urlsplit
+import httpx
 
 from . import __version__, auth, paths
 from .api import Spotify, SpotifyError
@@ -175,7 +176,7 @@ def main(argv=None):
         run(args)
     except KeyboardInterrupt:
         print("\ntspotify закрыт.")
-    except (RuntimeError, OSError, ValueError) as error:
+    except (RuntimeError, OSError, ValueError, httpx.HTTPError) as error:
         print("\ntspotify: " + str(error), file=sys.stderr)
         print("Диагностика: tspotify doctor", file=sys.stderr)
         raise SystemExit(1) from None

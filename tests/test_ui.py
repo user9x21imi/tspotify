@@ -176,6 +176,33 @@ def test_help_and_exit(app):
     assert not app.running
 
 
+def test_full_playlist_shortcut_preserves_selected_item(app):
+    app.key("P")
+    settle(app)
+    assert app.test_calls[-1][0] == "start_context"
+    assert app.test_calls[-1][1][0] == "playlist"
+
+
+def test_command_failure_is_displayed_instead_of_success(app, monkeypatch):
+    def fail(*args):
+        raise RuntimeError("test network failure")
+
+    monkeypatch.setattr(ui.API, "control", fail)
+    app.key(" ")
+    settle(app)
+    assert "test network failure" in app.notice
+
+
+def test_hiding_spectrum_and_cover_style_toggle(app):
+    app.key("L")
+    app.key("v")
+    app.key("\n")
+    assert not app.show_spectrum
+    original = app.art_mode
+    app.key("a")
+    assert app.art_mode != original
+
+
 @pytest.mark.parametrize("height,width", [(30, 78), (40, 100), (48, 140), (80, 160), (18, 60)])
 def test_layout_and_live_animation_survive_terminal_resize(app, height, width):
     app.render()

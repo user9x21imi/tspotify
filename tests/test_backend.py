@@ -107,3 +107,14 @@ def test_log_reader_distinguishes_new_event_with_identical_track_and_position():
     )
     backend._events()
     assert backend.event["signature"] != first
+
+
+def test_restarted_engine_uses_latest_device_id_in_same_minute_log():
+    target = paths.BACKEND_CACHE / "spotify-player-repeated.log"
+    target.write_text(
+        "Initializing a new integrated player with device_id=1111-aaaa\n"
+        "Initializing a new integrated player with device_id=2222-bbbb\n"
+    )
+    backend = Backend()
+    backend._events()
+    assert backend.device_id == "2222-bbbb"
