@@ -19,6 +19,8 @@ API = "https://api.github.com/repos/user9x21imi/tspotify/releases/latest"
 
 
 def version(value):
+    if not isinstance(value, str):
+        return None
     match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", value)
     return tuple(map(int, match.groups())) if match else None
 
@@ -74,16 +76,17 @@ def install(tag):
     if os.name == "nt":
         # Windows locks running executables. A separate PowerShell waits for us
         # to exit before replacing the app; no execution-policy bypass is used.
-        launcher = directory / "update.ps1"
-        launcher.write_text(
-            f"Wait-Process -Id {os.getpid()} -ErrorAction SilentlyContinue\n"
-            f"$env:TSPOTIFY_RELEASE = '{tag}'\n"
-            f"try {{ & '{str(script).replace(chr(39), chr(39) * 2)}' }} "
-            "catch { Write-Error $_; Read-Host 'Press Enter' }\n",
-            encoding="utf-8-sig",
+        quoted_script = str(script).replace("'", "''")
+        quoted_directory = str(directory).replace("'", "''")
+        command = (
+            f"Wait-Process -Id {os.getpid()} -ErrorAction SilentlyContinue; "
+            f"$env:TSPOTIFY_RELEASE = '{tag}'; "
+            f"try {{ & ([scriptblock]::Create([IO.File]::ReadAllText('{quoted_script}'))) }} "
+            "catch { Write-Error $_ -ErrorAction Continue; Read-Host 'Press Enter' } "
+            f"finally {{ Remove-Item -Recurse -Force '{quoted_directory}' -ErrorAction SilentlyContinue }}"
         )
         subprocess.Popen(
-            ["powershell.exe", "-NoProfile", "-File", str(launcher)],
+            ["powershell.exe", "-NoProfile", "-Command", command],
             env=env,
             creationflags=subprocess.CREATE_NEW_CONSOLE,
         )

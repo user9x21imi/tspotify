@@ -154,21 +154,19 @@ class Spotify:
         current = next((d for d in devices if d["id"] == self.device_id), None)
         if current:
             return
-        self.on_status("Переподключаю встроенный Spotify…")
-        self.backend.restart()
-        self.device_id = self.backend.device_id
-        deadline = time.monotonic() + 15
-        while time.monotonic() < deadline:
-            devices = self.devices()
-            current = next((d for d in devices if d["id"] == self.backend.device_id), None)
-            if not current:
-                current = next((d for d in devices if d.get("name") == "tspotify"), None)
-            if current:
-                self.device_id = current["id"]
-                self.backend.device_id = current["id"]
-                self.on_status("Устройство зарегистрировано. Запускаю трек…")
-                return
-            time.sleep(1)
+        for attempt in range(2):
+            self.on_status(f"Переподключаю встроенный Spotify ({attempt + 1}/2)…")
+            self.backend.restart()
+            self.device_id = self.backend.device_id
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline:
+                devices = self.devices()
+                current = next((d for d in devices if d["id"] == self.backend.device_id), None)
+                if current:
+                    self.device_id = current["id"]
+                    self.on_status("Устройство зарегистрировано. Запускаю трек…")
+                    return
+                time.sleep(1)
         raise SpotifyError(
             "Spotify не зарегистрировал устройство после переподключения. Проверьте сеть и повторите."
         )
