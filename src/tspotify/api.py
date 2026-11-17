@@ -7,7 +7,7 @@ from urllib.parse import quote
 
 import httpx
 
-from . import auth, paths
+from . import auth, paths, session
 
 
 class SpotifyError(RuntimeError):
@@ -42,13 +42,45 @@ class Spotify:
         self.device_id = None
         self.external = False
         self.backend_factory = None
-        self.last_playback = {}
+        self.resume_data = session.load()
+        self.session_muted = False
+        self._runtime_volume = None
+        self.idle = True
+        self.last_playback = {
+            "item": self.resume_data.get("track"),
+            "is_playing": False,
+            "progress_ms": self.resume_data.get("position_ms", 0),
+            "device": {"name": "tspotify", "volume_percent": self.resume_data["volume"]},
+        }
         self._last_remote_poll = 0.0
         self._lock = threading.Lock()
         self.on_status = lambda message: None
 
     def close(self):
         self.http.close()
+
+    @property
+    def current_volume(self):
+        if self._runtime_volume is not None:
+            return self._runtime_volume
+        return (
+            0 if self.session_muted or getattr(self.backend, "muted", False) else self.resume_data["volume"]
+        )
+
+    def save_session(self, playback=None, volume=None, view=None):
+        if self.session_muted or getattr(self.backend, "muted", False):
+            return
+        changes = {}
+        if volume is not None:
+            changes["volume"] = max(0, min(100, int(volume)))
+            if changes["volume"]:
+                changes["unmuted_volume"] = changes["volume"]
+        if playback and isinstance(playback.get("item"), dict) and playback["item"].get("id"):
+            changes["track"] = playback["item"]
+            changes["position_ms"] = max(0, int(playback.get("progress_ms") or 0))
+        if view is not None:
+            changes["view"] = view
+        self.resume_data = session.save(**changes)
 
     def request(self, method, path, body=None, _retry=0):
         remaining = self.rate_until - time.monotonic()
@@ -130,13 +162,27 @@ class Spotify:
         if match:
             self.device_id = match["id"]
             self.external = True
+            self.idle = False
+            self.last_playback = {}
         return match
 
     def playback(self, force=False):
+        if self.idle and not self.external and self.last_playback.get("item"):
+            return {
+                **self.last_playback,
+                "is_playing": False,
+                "device": {"name": "tspotify", "volume_percent": self.current_volume},
+            }
         if not self.external and self.backend:
             try:
                 value = self.backend.playback(self.last_playback)
                 if value:
+                    if self.idle:
+                        value = {
+                            **value,
+                            "is_playing": False,
+                            "device": {**(value.get("device") or {}), "volume_percent": self.current_volume},
+                        }
                     self.last_playback = value
                     return value
             except (OSError, TimeoutError):
@@ -214,7 +260,7 @@ class Spotify:
             self.on_status("Движок остановился. Восстанавливаю соединение без звука…")
             self.recover_device(force=True)
 
-    def start(self, item, context_uri=None):
+    def start(self, item, context_uri=None, position_ms=0):
         self.ensure_engine()
         item = dict(item)
         if not item.get("duration_ms") and isinstance(item.get("duration"), dict):
@@ -232,6 +278,9 @@ class Spotify:
         if not context_uri and album.get("id"):
             context_uri = "spotify:album:" + album["id"]
         body = {"context_uri": context_uri, "offset": {"uri": uri}} if context_uri else {"uris": [uri]}
+        position_ms = max(0, min(int(position_ms), max(0, (item.get("duration_ms") or 86400000) - 1)))
+        if position_ms:
+            body["position_ms"] = position_ms
         # The backend's CLI starts tasks asynchronously and acknowledges them too early.
         # Send directly and require a real Playing event / remote state for this track.
         if self.backend and not self.external:
@@ -273,18 +322,22 @@ class Spotify:
             self.last_playback = {
                 "item": item,
                 "is_playing": True,
-                "progress_ms": 0,
-                "device": {"id": self.device_id, "name": "tspotify", "volume_percent": 0},
+                "progress_ms": position_ms,
+                "device": {"id": self.device_id, "name": "tspotify", "volume_percent": self.current_volume},
             }
-            volume = getattr(self.backend, "preferred_volume", 0)
+            self.idle = False
+            volume = getattr(self.backend, "preferred_volume", self.current_volume)
             if volume > 0 and not getattr(self.backend, "muted", True):
                 self.control("volume", volume)
                 self.last_playback["device"]["volume_percent"] = volume
+            self.save_session(self.last_playback, volume=self.current_volume)
             return "Воспроизводится: " + item.get("name", "трек")
         deadline = time.monotonic() + 12
         while time.monotonic() < deadline:
             value = self.playback(force=True)
             if value.get("is_playing") and (value.get("item") or {}).get("id") == track_id:
+                self.idle = False
+                self.save_session(value, volume=(value.get("device") or {}).get("volume_percent"))
                 return "Воспроизводится: " + item.get("name", "трек")
             time.sleep(0.5)
         raise SpotifyError("Spotify принял запрос, но запуск выбранного трека не подтверждён.")
@@ -304,6 +357,12 @@ class Spotify:
 
     def _control(self, command, value=None):
         self.ensure_engine()
+        if command in ("play", "play-pause") and self.idle and not self.external:
+            snapshot = self.playback()
+            item = snapshot.get("item") or {}
+            if item.get("id"):
+                return self.start(item, position_ms=snapshot.get("progress_ms") or 0)
+            raise SpotifyError("Выберите трек в библиотеке, чтобы начать воспроизведение")
         device = self.device_query()
         if command == "play-pause":
             command = "pause" if self.playback().get("is_playing") else "play"
@@ -317,6 +376,8 @@ class Spotify:
                 if value > 0:
                     self.backend.muted = False
                 self.backend.unmute_after_user_volume(value)
+            self._runtime_volume = value
+            self.save_session(volume=value)
             return f"Громкость: {value}%"
         if command == "seek":
             position = max(0, int(value))

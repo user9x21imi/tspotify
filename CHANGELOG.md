@@ -2,6 +2,9 @@
 
 ## 0.1.0
 
+- Persistent volume, track/position and library view; explicit Space resumes the saved position without startup autoplay.
+- Ctrl+Q exits from every input mode and saves the session; muted tests and demos preserve ordinary preferences.
+
 - Single-click open/play, clickable volume and transport controls, footer actions and modal navigation.
 - Spotify-only spectrum capture on Linux; shared system-output recording removed on all platforms.
 

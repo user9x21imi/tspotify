@@ -143,6 +143,7 @@ def run(args):
     except auth.LoginRequired:
         auth.login(qr=args.qr)
     api = Spotify()
+    api.session_muted = args.muted
     backend = None
     try:
         if args.command == "devices":

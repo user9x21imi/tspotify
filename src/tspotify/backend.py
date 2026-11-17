@@ -20,7 +20,7 @@ from pathlib import Path
 
 import httpx
 
-from . import paths
+from . import paths, session
 
 VERSION = "0.25.2"
 ASSETS = {
@@ -118,7 +118,7 @@ class Backend:
     def __init__(self, muted=False, external=False, on_authorize=None):
         self.muted = muted
         self.external = external
-        self.preferred_volume = 35
+        self.preferred_volume = 0 if muted else session.load()["volume"]
         self._volume_set_at = 0.0
         self.device_id = None
         self.on_authorize = on_authorize

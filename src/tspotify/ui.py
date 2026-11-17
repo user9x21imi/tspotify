@@ -94,7 +94,10 @@ class App:
         self.library_data = {}
         self.library_loaded_at = {}
         self.library_requested = set()
-        self.playback = {}
+        self.playback = dict(getattr(API, "last_playback", {}))
+        self.resume_view = dict(getattr(API, "resume_data", {}).get("view", {}))
+        self.restore_selection = self.resume_view or None
+        self.last_checkpoint = time.monotonic()
         self.updated = time.monotonic()
         self.art_url = ""
         self.art = []
@@ -146,7 +149,8 @@ class App:
         self.selected = 0
         self.notice = "Готово · / — поиск, ? — все клавиши"
         self.running = True
-        self.volume = 0
+        self.volume = getattr(API, "current_volume", 0)
+        self.muted_volume = getattr(API, "resume_data", {}).get("unmuted_volume", 35)
         self.audio = Audio(source=lambda: bool(API.backend and not getattr(API, "external", False)))
         self.colors = {}
         self.next_color = 20
@@ -177,7 +181,63 @@ class App:
         self.s.timeout(16)
         self.s.keypad(True)
         curses.curs_set(0)
-        self.library("Плейлисты")
+        root = self.resume_view.get("library", self.resume_view.get("section", "Плейлисты"))
+        self.library(root if root in SECTIONS else "Плейлисты")
+        self.query = self.resume_view.get("query", "")
+        if not isinstance(self.query, str):
+            self.query = ""
+        context = self.resume_view.get("context_uri", "")
+        if (
+            isinstance(context, str)
+            and context.startswith(("spotify:playlist:", "spotify:album:"))
+            and len(context.split(":")) == 3
+        ):
+            _, kind, identity = context.split(":")
+            self.submit("open", open_context, kind, identity, self.resume_view.get("section", "Треки"))
+        elif self.query and str(self.resume_view.get("section", "")).startswith("Поиск:"):
+            self.submit("search", cli, "search", self.query)
+        else:
+            self.restore_selected_row()
+        self.fullscreen = bool(self.resume_view.get("fullscreen", False))
+
+    def restore_selected_row(self):
+        view = self.restore_selection
+        if not view or view.get("section") != self.section or not self.items:
+            return
+        index = view.get("selected", 0)
+        if type(index) is not int:
+            index = 0
+        self.selected = next(
+            (i for i, (_, item) in enumerate(self.items) if item.get("id") == view.get("selected_id")),
+            max(0, min(index, len(self.items) - 1)),
+        )
+        self.restore_selection = None
+
+    def checkpoint(self):
+        if DEMO_MODE or not hasattr(API, "save_session"):
+            return
+        item = self.items[self.selected][1] if self.items and 0 <= self.selected < len(self.items) else {}
+        context = item.get("_context_uri", "")
+        snapshot = dict(self.playback)
+        progress = snapshot.get("progress_ms") or 0
+        if snapshot.get("is_playing"):
+            progress += max(0, time.monotonic() - self.updated) * 1000
+        duration_ms = (snapshot.get("item") or {}).get("duration_ms")
+        snapshot["progress_ms"] = int(min(progress, duration_ms) if duration_ms else progress)
+        view = {
+            "section": self.section,
+            "library": self.history[0][0] if self.history else self.section,
+            "context_uri": context,
+            "selected": self.selected,
+            "selected_id": item.get("id"),
+            "query": self.query,
+            "fullscreen": self.fullscreen,
+        }
+        try:
+            API.save_session(snapshot, volume=self.volume, view=view)
+        except (OSError, ValueError):
+            self.notice = "Не удалось сохранить сессию: проверьте свободное место"
+        self.last_checkpoint = time.monotonic()
 
     def init_pair(self, pair, fg, bg):
         if not curses.has_colors():
@@ -294,11 +354,14 @@ class App:
                         if not items and section in ("Ваши миксы", "Миксы дня")
                         else f"Элементов: {len(items)}"
                     )
+                self.restore_selected_row()
                 continue
             if key == "poll":
                 self.playback = value or {}
                 self.updated = time.monotonic()
                 self.volume = (self.playback.get("device") or {}).get("volume_percent") or 0
+                if time.monotonic() - self.last_checkpoint > 5:
+                    self.checkpoint()
                 images = ((self.playback.get("item") or {}).get("album") or {}).get("images", [])
                 url = images[0]["url"] if images else ""
                 if url != self.art_url:
@@ -322,6 +385,7 @@ class App:
                 ]:
                     self.items.extend((kind, item) for item in (value or {}).get(name, []) if item)
                 self.selected = 0
+                self.restore_selected_row()
                 self.notice = f"Найдено: {len(self.items)} · Enter — слушать"
             elif key == "open":
                 data = value or {}
@@ -341,6 +405,7 @@ class App:
                     if isinstance(x, dict) and x.get("id", x.get("track"))
                 ]
                 self.selected = 0
+                self.restore_selected_row()
                 self.notice = f"Треков: {len(self.items)} · Enter слушать · ← назад"
             elif key == "command":
                 self.notice = value if isinstance(value, str) else "Команда подтверждена"
@@ -613,7 +678,7 @@ class App:
         self.spectrum_area = (sy, 4, max(1, h - sy - 3), w - 8)
         self.spectrum(*self.spectrum_area)
         self.put(
-            h - 2, 4, f"Громкость {self.volume}% · F7–F12 / ± · F3 / Esc свернуть · ? помощь", 3, width=w - 8
+            h - 2, 4, f"Громкость {self.volume}% · ± / F7–F12 · F3/Esc назад · Ctrl+Q выход", 3, width=w - 8
         )
         self.put(h - 1, 4, self.notice, 4, width=w - 8)
 
@@ -680,12 +745,12 @@ class App:
             h - 1,
             w,
             [
-                ("[Enter Открыть]", "\n"),
+                ("[Enter ▶]", "\n"),
                 ("[/ Поиск]", "/"),
                 ("[← Назад]", curses.KEY_LEFT),
                 ("[P Плейлист]", "P"),
                 ("[? Помощь]", "?"),
-                ("[q Выход]", "q"),
+                ("[Ctrl+Q Выход]", "\x11"),
             ],
         )
         if self.help:
@@ -1067,7 +1132,7 @@ class App:
             ("L", "Редактор порядка окон и обложки"),
             ("a", "Обложка: точки / ASCII / блоки"),
             ("? / F1 · Esc", "Показать / закрыть эту справку"),
-            ("q · Ctrl+C", "Закрыть tspotify"),
+            ("Ctrl+Q · q · Ctrl+C", "Сохранить сессию и выйти"),
         ]
         visible = max(1, h - 5)
         self.help_offset = max(0, min(self.help_offset, len(lines) - visible))
@@ -1105,7 +1170,7 @@ class App:
             self.command("playback", "volume", str(volume))
 
     def key(self, k):
-        if k == "\x03":
+        if k in ("\x03", "\x11"):
             self.running = False
             return
         if k == curses.KEY_MOUSE:
@@ -1233,6 +1298,8 @@ class App:
         dirty = True
         mouse_tracking = False
         try:
+            # Raw mode delivers Ctrl+Q instead of consuming it as XON flow control.
+            curses.raw()
             try:
                 curses.mousemask(curses.ALL_MOUSE_EVENTS | curses.REPORT_MOUSE_POSITION)
                 curses.mouseinterval(180)
@@ -1271,6 +1338,7 @@ class App:
                 except curses.error:
                     pass
         finally:
+            self.checkpoint()
             if mouse_tracking:
                 sys.stdout.write("\x1b[?1003l")
                 sys.stdout.flush()

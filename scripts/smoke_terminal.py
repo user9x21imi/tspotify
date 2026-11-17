@@ -13,6 +13,7 @@ command = [str(binary), "--demo", "--no-splash"]
 height, width = (24, 80) if "--compact" in sys.argv else (48, 140)
 output = []
 seen = threading.Event()
+quit_key = "\x11" if "--ctrl-q" in sys.argv else "q"
 
 
 def interact(send):
@@ -56,13 +57,13 @@ if os.name == "nt":
         process.close(force=True)
         raise SystemExit("Native terminal failed to render: " + "".join(output)[-2000:])
     interact(process.write)
-    process.write("q")
+    process.write(quit_key)
     deadline = time.monotonic() + 10
     while process.isalive() and time.monotonic() < deadline:
         time.sleep(0.1)
     if process.isalive():
         process.close(force=True)
-        raise SystemExit("Native terminal did not exit after q")
+        raise SystemExit("Native terminal did not exit after the requested shortcut")
 else:
     import fcntl
     import pty
@@ -95,15 +96,16 @@ else:
         process.wait()
         raise SystemExit("Native terminal failed to render: " + "".join(output)[-2000:])
     interact(lambda value: os.write(master, value.encode()))
-    os.write(master, b"q")
+    os.write(master, quit_key.encode())
     try:
         code = process.wait(timeout=10)
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait()
-        raise SystemExit("Native terminal did not exit after q") from None
+        raise SystemExit("Native terminal did not exit after the requested shortcut") from None
     os.close(master)
     if code:
         raise SystemExit("Native terminal returned an error: " + "".join(output)[-2000:])
 
-print("Native terminal rendered dotted UI and exited with q; no account or audio used.")
+shortcut = "Ctrl+Q" if quit_key == "\x11" else "q"
+print(f"Native terminal rendered dotted UI and exited with {shortcut}; no account or audio used.")

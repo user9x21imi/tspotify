@@ -113,7 +113,7 @@ Desktop Spotify being installed is not the same as it being an available device:
 | `s`, `r` | Shuffle, repeat |
 | `L` | Layout editor: arrows select, `K`/`J` move, `c` swaps cover side, `v` toggles spectrum, Enter saves |
 | `?`, `F1` | Full key reference |
-| `q`, `Ctrl+C` | Exit and stop the integrated engine |
+| `Ctrl+Q`, `q`, `Ctrl+C` | Save the session, exit and stop the integrated engine |
 
 ## Fonts, terminals and transparency
 
@@ -172,3 +172,9 @@ Recent history includes available playlist/album contexts and unique recently pl
 The expanded player uses 256×256 artwork and a real dotted spectrum. Mouse tracking is enabled only while the interface is open. Hold Shift when selecting text if your terminal reserves normal mouse actions for the application.
 
 [Russian prompt for a separate SoundCloud project](docs/SOUNDCLOUD_PROMPT.ru.md).
+
+### Session memory
+
+Normal launches restore the last chosen volume, current track and position, open library section or playlist, selected row, search text and expanded-player view. Playback opens **paused**; press Space to continue from the saved position. The last nonzero volume is remembered for mute/restore too. A first launch uses 35% rather than forcing zero.
+
+State is checkpointed while the UI runs and saved again on exit, including Ctrl+Q and normal terminal-close handling. `--muted` temporarily starts at zero and never overwrites the ordinary saved session; demo mode is separate as well. An already active external Spotify Connect device keeps its own live playback state. Session data lives in the private configuration directory shown by `tspotify doctor`.

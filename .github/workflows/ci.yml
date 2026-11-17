@@ -75,12 +75,12 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           python scripts/smoke_terminal.py dist/tspotify/tspotify --interact
-          python scripts/smoke_terminal.py dist/tspotify/tspotify --compact
+          python scripts/smoke_terminal.py dist/tspotify/tspotify --compact --ctrl-q
       - name: Exercise native terminal rendering and q (Windows, offline)
         if: runner.os == 'Windows'
         run: |
           python scripts/smoke_terminal.py dist/tspotify/tspotify.exe --interact
-          python scripts/smoke_terminal.py dist/tspotify/tspotify.exe --compact
+          python scripts/smoke_terminal.py dist/tspotify/tspotify.exe --compact --ctrl-q
       - name: Package public release files
         run: python scripts/package_release.py ${{ matrix.platform }}
       - uses: actions/upload-artifact@v4

@@ -483,3 +483,83 @@ def test_progress_bar_click_seeks_to_clicked_position(app, monkeypatch, expanded
     mouse_at(app, monkeypatch, x + width - 1, y, curses.BUTTON1_CLICKED)
     settle(app)
     assert app.test_calls[-1] == ("control", ("seek", "120000"))
+
+
+@pytest.mark.parametrize("mode", ["normal", "editing", "help", "layout_editor", "fullscreen"])
+def test_ctrl_q_exits_from_every_input_mode(app, mode):
+    if mode != "normal":
+        setattr(app, mode, True)
+    app.key("\x11")
+    assert not app.running
+
+
+def test_ctrl_q_exit_hint_is_visible_and_clickable_on_compact_terminal(app):
+    app.s.size = (24, 80)
+    app.render()
+    assert any("Ctrl+Q" in text for _, _, text in app.s.calls)
+    assert any(hit[4:] == ("key", "\x11") for hit in app.hits)
+
+
+def test_checkpoint_records_selected_context_volume_and_elapsed_position(app, monkeypatch):
+    saved = []
+    monkeypatch.setattr(ui.API, "save_session", lambda *a, **kw: saved.append((a, kw)), raising=False)
+    app.volume = 65
+    app.playback = {
+        "item": {"id": "playing", "duration_ms": 180000},
+        "progress_ms": 42000,
+        "is_playing": True,
+    }
+    app.updated = time.monotonic() - 2
+    app.items = [("track", {"id": "selected", "_context_uri": "spotify:playlist:p"})]
+    app.section = "Playlist"
+    app.checkpoint()
+    args, options = saved[0]
+    assert 43900 <= args[0]["progress_ms"] <= 44500
+    assert options["volume"] == 65
+    assert options["view"]["selected_id"] == "selected"
+    assert options["view"]["context_uri"] == "spotify:playlist:p"
+
+
+def test_restore_selection_finds_identity_after_playlist_reordering(app):
+    app.section = "Playlist"
+    app.items = [("track", {"id": "new"}), ("track", {"id": "old"})]
+    app.restore_selection = {"section": "Playlist", "selected": 0, "selected_id": "old"}
+    app.restore_selected_row()
+    assert app.selected == 1
+
+
+def test_saved_open_playlist_and_volume_restore_into_a_new_interface(app, monkeypatch):
+    from tspotify.api import Spotify
+
+    memory = Spotify()
+    second = None
+    try:
+        monkeypatch.setattr(ui.API, "save_session", memory.save_session, raising=False)
+        app.volume = 65
+        app.section = "Mix"
+        app.history = [("Плейлисты", [], 0)]
+        app.items = [("track", {"id": "t", "_context_uri": "spotify:playlist:p"})]
+        app.playback = {"item": {"id": "t", "duration_ms": 180000}, "progress_ms": 42000, "is_playing": False}
+        app.checkpoint()
+        from tspotify import session
+
+        data = session.load()
+        monkeypatch.setattr(ui.API, "resume_data", data, raising=False)
+        monkeypatch.setattr(ui.API, "current_volume", data["volume"], raising=False)
+        monkeypatch.setattr(
+            ui.API,
+            "last_playback",
+            {"item": data["track"], "progress_ms": data["position_ms"], "is_playing": False},
+            raising=False,
+        )
+        second = ui.App(Window())
+        settle(second)
+        assert second.volume == 65 and second.section == "Mix"
+        assert second.items[second.selected][1]["id"] == "t"
+        assert second.playback["progress_ms"] == 42000 and not second.playback["is_playing"]
+        assert not any(name == "start" for name, _ in app.test_calls)
+    finally:
+        memory.close()
+        if second:
+            second.pool.shutdown(wait=True, cancel_futures=True)
+            second.art_pool.shutdown(wait=True, cancel_futures=True)
