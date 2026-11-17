@@ -125,8 +125,8 @@ def test_log_reader_distinguishes_new_event_with_identical_track_and_position():
 def test_restarted_engine_uses_latest_device_id_in_same_minute_log():
     target = paths.BACKEND_CACHE / "spotify-player-repeated.log"
     target.write_text(
-        "Initializing a new integrated player with device_id=1111-aaaa\n"
-        "Initializing a new integrated player with device_id=2222-bbbb\n"
+        "2026-01-01T00:00:00Z INFO Initializing a new integrated player with device_id=1111-aaaa\n"
+        "2026-01-01T00:00:01Z INFO Initializing a new integrated player with device_id=2222-bbbb\n"
     )
     backend = Backend()
     backend._events()
@@ -141,3 +141,24 @@ def test_volume_acknowledgement_does_not_jump_back_to_stale_cached_value():
     backend._volume_set_at = time.monotonic()
     assert backend.playback({})["device"]["volume_percent"] == 40
     assert backend._base["device"]["volume_percent"] == 0
+
+
+def test_late_write_to_old_log_does_not_select_a_dead_device():
+    import os
+    from datetime import datetime
+
+    old = paths.BACKEND_CACHE / "spotify-player-old.log"
+    current = paths.BACKEND_CACHE / "spotify-player-new.log"
+    old.write_text(
+        "2026-01-01T00:00:00Z INFO Initializing a new integrated player with device_id=1111-aaaa\n"
+    )
+    current.write_text(
+        "2026-01-01T00:00:10Z INFO Initializing a new integrated player with device_id=2222-bbbb\n"
+    )
+    os.utime(old, (2000000001, 2000000001))
+    os.utime(current, (2000000000, 2000000000))
+    backend = Backend()
+    backend.log_started = datetime.fromisoformat("2026-01-01T00:00:05+00:00").timestamp()
+    backend._events()
+    assert backend.device_id == "2222-bbbb"
+    assert backend.log_path == current

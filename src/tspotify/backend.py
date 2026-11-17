@@ -1,6 +1,7 @@
 """Pinned, verified streaming engine and a foreground-owned cross-platform PTY."""
 
 import hashlib
+from datetime import datetime
 import io
 import json
 import os
@@ -139,6 +140,8 @@ class Backend:
         self.authorization_error = None
         self._authorization_started = 0.0
         self.reader_thread = None
+        self.log_started = 0
+        self.log_path = None
 
     def request(self, request, timeout=2):
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
@@ -173,6 +176,8 @@ class Backend:
     def start(self):
         paths.prepare()
         binary = engine_path()
+        self.log_started = time.time()
+        self.log_path = None
         # This folder belongs to tspotify; never overwrite a user's other client settings.
         config = f'''client_id = "d420a117a32841c2b3474932e49fb54b"
 login_redirect_uri = "http://127.0.0.1:8989/login"
@@ -304,19 +309,31 @@ audio_cache = true
         files = list(paths.BACKEND_CACHE.glob("spotify-player-*.log"))
         if not files:
             return
-        latest = max(files, key=lambda p: p.stat().st_mtime)
+        if self.log_path is None:
+            candidates = []
+            for path in files:
+                try:
+                    if path.stat().st_mtime < self.log_started - 1:
+                        continue
+                    with path.open("rb") as stream:
+                        stream.seek(max(0, path.stat().st_size - 200000))
+                        header = stream.read().decode(errors="replace")
+                    for match in re.finditer(
+                        r"(?m)^(\S+).*Initializing a new integrated player with device_id=([0-9a-f-]+)",
+                        header,
+                    ):
+                        stamp = datetime.fromisoformat(match[1].replace("Z", "+00:00")).timestamp()
+                        if stamp >= self.log_started:
+                            candidates.append((stamp, path, match[2]))
+                except (OSError, ValueError):
+                    continue
+            if candidates:
+                _, self.log_path, identity = max(candidates, key=lambda entry: entry[0])
+                if self.device_id is None:
+                    self.device_id = identity
+        latest = self.log_path or max(files, key=lambda p: p.stat().st_mtime)
         try:
             with latest.open("rb") as stream:
-                if self.device_id is None:
-                    stream.seek(max(0, latest.stat().st_size - 200000))
-                    header = stream.read().decode(errors="replace")
-                    matches = list(
-                        re.finditer(
-                            r"Initializing a new integrated player with device_id=([0-9a-f-]+)", header
-                        )
-                    )
-                    if matches:
-                        self.device_id = matches[-1][1]
                 stream.seek(max(0, latest.stat().st_size - 18000))
                 text = stream.read().decode(errors="replace")
         except OSError:
