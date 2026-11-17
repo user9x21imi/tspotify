@@ -182,7 +182,10 @@ def run(args):
                 # The engine starts silent. Do not let a restored Spotify session
                 # become audible; only an explicit play/volume action restores volume.
                 try:
-                    api.control("pause")
+                    if getattr(backend, "device_id", None):
+                        # Startup discovery can lag the local socket. A best-effort
+                        # pause must not trigger slow recovery before the UI opens.
+                        api.request("PUT", "me/player/pause?" + api.device_query())
                 except SpotifyError:
                     pass
             # Import curses only for the UI: doctor, installation and OAuth work without a TTY.

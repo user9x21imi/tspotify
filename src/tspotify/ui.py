@@ -483,6 +483,7 @@ class App:
         self.hit(y, x, 1, len(text), "key", key)
 
     def mouse(self):
+        self.mouse_changed = False
         try:
             _, x, y, _, state = curses.getmouse()
         except curses.error:
@@ -490,6 +491,7 @@ class App:
         wheel_up = state & getattr(curses, "BUTTON4_PRESSED", 0)
         wheel_down = state & getattr(curses, "BUTTON5_PRESSED", 0)
         clicked = state & (curses.BUTTON1_PRESSED | curses.BUTTON1_CLICKED | curses.BUTTON1_DOUBLE_CLICKED)
+        self.mouse_changed = bool(clicked or wheel_up or wheel_down)
         if self.help or self.layout_editor:
             if self.help and (wheel_up or wheel_down):
                 self.help_offset = max(0, self.help_offset + (-3 if wheel_up else 3))
@@ -500,7 +502,9 @@ class App:
             if not (by <= y < by + height and bx <= x < bx + width):
                 continue
             if action in ("row", "panel"):
-                self.focus_panel = "library" if action == "row" else value
+                panel = "library" if action == "row" else value
+                self.mouse_changed |= self.focus_panel != panel
+                self.focus_panel = panel
                 if wheel_up or wheel_down:
                     if self.focus_panel == "library":
                         self.selected = max(
@@ -1194,9 +1198,11 @@ class App:
                     next_frame = now + (1 / 30 if self.audio.enabled else 1 / 8)
                 self.s.timeout(max(1, min(33, int((next_frame - time.monotonic()) * 1000))))
                 try:
-                    self.key(self.s.get_wch())
-                    dirty = True
-                    next_frame = 0
+                    key = self.s.get_wch()
+                    self.key(key)
+                    if key != curses.KEY_MOUSE or self.mouse_changed:
+                        dirty = True
+                        next_frame = 0
                 except curses.error:
                     pass
         finally:
