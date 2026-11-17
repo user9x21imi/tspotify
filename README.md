@@ -108,7 +108,7 @@ Desktop Spotify being installed is not the same as it being an available device:
 | `1`, `2`, `3` | Playlists, liked tracks, albums |
 | `4`, `5`, `6`, `7`, `8` | Recent history, saved Spotify mixes, new releases, recommendations, saved daily mixes |
 | `F3`, expand button, cover click | Expanded artwork, track details and a smooth dotted spectrum; F3/Esc returns |
-| Mouse | Hover focuses panels; click selects, double-click opens/plays, wheel scrolls; tabs and controls are clickable |
+| Mouse | Hover focuses panels; single click opens a playlist or plays a track, wheel scrolls; tabs and controls are clickable |
 | `a` | Dots / text ASCII / block artwork |
 | `s`, `r` | Shuffle, repeat |
 | `L` | Layout editor: arrows select, `K`/`J` move, `c` swaps cover side, `v` toggles spectrum, Enter saves |
@@ -131,11 +131,13 @@ Recommended terminals: Windows Terminal with PowerShell, Terminal.app/iTerm2 on 
 
 The 30 fps spectrum uses actual output audio, with separate attack/release smoothing. It does not animate random bars.
 
-- **Linux:** PulseAudio/PipeWire monitor, using `pactl` and `parec`.
-- **Windows:** WASAPI loopback through SoundCard.
-- **macOS:** an output loopback device such as BlackHole is needed. Playback works without it; the spectrum panel explains when capture is unavailable. tspotify never silently records the physical microphone.
+- **Linux:** captures the integrated Spotify engine's specific PulseAudio/PipeWire sink input with `parec --monitor-stream`. It does not capture the default mixed output. Stream recreation and output-device changes are detected automatically.
+- **Windows / macOS:** automatic whole-system loopback is disabled. For visualization, route Spotify alone to a dedicated virtual audio channel, then set `TSPOTIFY_SPOTIFY_LOOPBACK` to that capture device's exact name or ID. A shared system-output channel is unsuitable. Without a dedicated channel, music works and the spectrum explains why it is unavailable.
+- **External Spotify Connect:** the remote audio is not available locally; unrelated local sounds are never substituted.
 
-To choose a loopback device: set `TSPOTIFY_LOOPBACK` to part of its name. These are capture requirements, not playback requirements.
+The physical microphone is never chosen automatically. `TSPOTIFY_LOOPBACK` (the former shared-output option) is no longer used.
+
+Visible transport buttons include volume −/+, play/pause, mute, previous/next and favorite. The footer, layout editor and help navigation have clickable controls too; click the progress bar to seek. Single-click list actions match Enter; a second event from a double-click does not accidentally play the first track of a just-opened playlist.
 
 ## Reliability and privacy
 

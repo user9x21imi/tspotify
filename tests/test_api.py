@@ -452,3 +452,11 @@ def test_spotify_activation_restriction_is_retried_after_silent_transfer(api, mo
     assert len(calls) == 3
     assert json.loads(calls[1].content) == {"device_ids": ["device"], "play": False}
     assert "/play?device_id=device" in str(calls[2].url)
+
+
+def test_seek_uses_the_selected_device_and_clamps_negative_positions(api):
+    urls = []
+    api.device_id = "selected"
+    mock(api, lambda request: urls.append(str(request.url)) or httpx.Response(204))
+    api.control("seek", -100)
+    assert "position_ms=0&device_id=selected" in urls[0]

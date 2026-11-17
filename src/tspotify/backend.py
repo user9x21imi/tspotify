@@ -436,7 +436,9 @@ audio_cache = true
             return
         try:
             entries = json.loads(
-                subprocess.check_output(["pactl", "--format=json", "list", "sink-inputs"], timeout=3)
+                subprocess.check_output(
+                    ["pactl", "--format=json", "list", "sink-inputs"], timeout=3, stderr=subprocess.DEVNULL
+                )
             )
             for entry in entries:
                 props = entry.get("properties", {})
@@ -446,10 +448,17 @@ audio_cache = true
                     or props.get("application.name") == "PipeWire ALSA [spotify_player]"
                 )
                 if is_engine:
-                    subprocess.run(["pactl", "set-sink-input-volume", str(entry["index"]), "100%"], timeout=3)
+                    subprocess.run(
+                        ["pactl", "set-sink-input-volume", str(entry["index"]), "100%"],
+                        timeout=3,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
                     subprocess.run(
                         ["pactl", "set-sink-input-mute", str(entry["index"]), "0" if volume else "1"],
                         timeout=3,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
                     )
         except (OSError, ValueError, subprocess.SubprocessError):
             pass

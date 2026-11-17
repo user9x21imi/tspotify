@@ -318,6 +318,13 @@ class Spotify:
                     self.backend.muted = False
                 self.backend.unmute_after_user_volume(value)
             return f"Громкость: {value}%"
+        if command == "seek":
+            position = max(0, int(value))
+            self.request("PUT", f"me/player/seek?position_ms={position}&{device}")
+            if self.backend:
+                self.backend._snapshot_time = 0
+            self._last_remote_poll = 0
+            return "Позиция воспроизведения изменена"
         if command in ("next", "previous"):
             self.request("POST", f"me/player/{command}?{device}")
         elif command in ("play", "pause"):

@@ -35,7 +35,9 @@ def app(monkeypatch):
     monkeypatch.setattr(ui, "CONFIG", paths.CONFIG / "layout.json")
     monkeypatch.setattr(ui, "ASCII_ONLY", False)
     monkeypatch.setattr(
-        ui, "Audio", lambda: SimpleNamespace(bars=[0.0] * 32, enabled=True, status="test", close=lambda: None)
+        ui,
+        "Audio",
+        lambda **kwargs: SimpleNamespace(bars=[0.0] * 32, enabled=True, status="test", close=lambda: None),
     )
     track = {"id": "t", "name": "Track", "type": "track", "track": True, "artists": [{"name": "Artist"}]}
 
@@ -344,15 +346,16 @@ def mouse_at(app, monkeypatch, x, y, state):
     app.key(curses.KEY_MOUSE)
 
 
-def test_mouse_can_select_and_double_click_open_playlist(app, monkeypatch):
+def test_single_click_opens_playlist_and_following_double_event_does_not_play_track(app, monkeypatch):
     app.render()
     y, x, _, _, _, _ = next(hit for hit in app.hits if hit[4] == "row")
     mouse_at(app, monkeypatch, x, y, curses.BUTTON1_CLICKED)
     assert app.selected == 0
-    assert not any(call[0] == "context" for call in app.test_calls)
+    settle(app)
+    assert [call[0] for call in app.test_calls] == ["context"]
     mouse_at(app, monkeypatch, x, y, curses.BUTTON1_DOUBLE_CLICKED)
     settle(app)
-    assert app.test_calls[-1][0] == "context"
+    assert [call[0] for call in app.test_calls] == ["context"]
 
 
 def test_mouse_can_open_discovery_tab_and_expand_player(app, monkeypatch):
@@ -390,3 +393,93 @@ def test_help_can_scroll_in_compact_terminal(app):
     app.key(curses.KEY_DOWN)
     app.render()
     assert app.help_offset == 1
+
+
+def click_key(app, monkeypatch, key):
+    y, x, *_ = next(hit for hit in app.hits if hit[4:] == ("key", key))
+    mouse_at(app, monkeypatch, x, y, curses.BUTTON1_CLICKED)
+    settle(app)
+
+
+def test_single_click_plays_the_actual_clicked_track(app, monkeypatch):
+    app.items = [("track", {"id": "first", "name": "First"}), ("track", {"id": "second", "name": "Second"})]
+    app.render()
+    y, x, *_ = next(hit for hit in app.hits if hit[4:] == ("row", 1))
+    mouse_at(app, monkeypatch, x + 8, y, curses.BUTTON1_CLICKED)
+    settle(app)
+    assert app.test_calls[-1] == ("start", ({"id": "second", "name": "Second"},))
+
+
+@pytest.mark.parametrize("size", [(24, 80), (48, 140)])
+@pytest.mark.parametrize(
+    "key,command,value",
+    [
+        ("+", "volume", "45"),
+        ("-", "volume", "35"),
+        (" ", "play-pause", None),
+        ("n", "next", None),
+        ("p", "previous", None),
+    ],
+)
+def test_visible_transport_buttons_work_while_search_has_focus(app, monkeypatch, size, key, command, value):
+    app.s.size = size
+    app.volume = 40
+    app.editing = True
+    app.query = "unchanged"
+    app.render()
+    click_key(app, monkeypatch, key)
+    assert app.test_calls[-1] == ("control", (command, value))
+    assert app.query == "unchanged"
+
+
+def test_footer_enter_opens_playlist_and_search_button_focuses_search(app, monkeypatch):
+    app.render()
+    click_key(app, monkeypatch, "\n")
+    assert app.test_calls[-1][0] == "context"
+    app.render()
+    click_key(app, monkeypatch, "/")
+    assert app.editing
+
+
+def test_layout_buttons_select_move_and_save_without_keyboard(app, monkeypatch):
+    app.key("L")
+    app.render()
+    y, x, *_ = next(hit for hit in app.hits if hit[4:] == ("layout_row", 0))
+    mouse_at(app, monkeypatch, x, y, curses.BUTTON1_CLICKED)
+    first = app.order[0]
+    click_key(app, monkeypatch, "J")
+    assert app.order[1] == first
+    app.render()
+    click_key(app, monkeypatch, "\n")
+    assert not app.layout_editor and ui.CONFIG.exists()
+
+
+def test_help_buttons_scroll_and_close_without_clicking_underlying_controls(app, monkeypatch):
+    app.s.size = (24, 80)
+    app.key("?")
+    app.render()
+    click_key(app, monkeypatch, curses.KEY_DOWN)
+    assert app.help_offset == 1 and app.help
+    app.render()
+    click_key(app, monkeypatch, "\x1b")
+    assert not app.help and not app.test_calls
+
+
+def test_hover_and_wheel_never_activate_tracks(app, monkeypatch):
+    app.items = [("track", {"id": str(i), "name": str(i)}) for i in range(10)]
+    app.render()
+    y, x, *_ = next(hit for hit in app.hits if hit[4] == "row")
+    mouse_at(app, monkeypatch, x, y, curses.REPORT_MOUSE_POSITION)
+    mouse_at(app, monkeypatch, x, y, curses.BUTTON4_PRESSED)
+    assert not app.test_calls
+
+
+@pytest.mark.parametrize("expanded", [False, True])
+def test_progress_bar_click_seeks_to_clicked_position(app, monkeypatch, expanded):
+    app.fullscreen = expanded
+    app.playback["item"]["duration_ms"] = 120000
+    app.render()
+    y, x, height, width, *_ = next(hit for hit in app.hits if hit[4] == "seek")
+    mouse_at(app, monkeypatch, x + width - 1, y, curses.BUTTON1_CLICKED)
+    settle(app)
+    assert app.test_calls[-1] == ("control", ("seek", "120000"))

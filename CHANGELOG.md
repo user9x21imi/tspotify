@@ -2,6 +2,9 @@
 
 ## 0.1.0
 
+- Single-click open/play, clickable volume and transport controls, footer actions and modal navigation.
+- Spotify-only spectrum capture on Linux; shared system-output recording removed on all platforms.
+
 - Numbered discovery sections: recent contexts/tracks, saved Spotify mixes, new releases, recommendations and saved daily mixes.
 - Mouse panel focus, clickable tabs and controls, list selection/double-click and wheel scrolling.
 - F3 expanded player with detailed 256×256 artwork and a smooth dotted audio spectrum.

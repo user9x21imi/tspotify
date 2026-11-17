@@ -147,7 +147,7 @@ class App:
         self.notice = "Готово · / — поиск, ? — все клавиши"
         self.running = True
         self.volume = 0
-        self.audio = Audio()
+        self.audio = Audio(source=lambda: bool(API.backend and not getattr(API, "external", False)))
         self.colors = {}
         self.next_color = 20
         self.history = []
@@ -482,6 +482,29 @@ class App:
         self.put(y, x, text, 3)
         self.hit(y, x, 1, len(text), "key", key)
 
+    def button_row(self, y, w, actions, x=3):
+        for text, key in actions:
+            if x + len(text) > w - 2:
+                break
+            self.button(y, x, text, key)
+            x += len(text) + 1
+
+    def transport(self, y, w):
+        active = self.playback.get("is_playing", False)
+        self.button_row(
+            y,
+            w,
+            [
+                ("[-]", "-"),
+                ("[+]", "+"),
+                ("[Space Пауза]" if active else "[Space Играть]", " "),
+                ("[m Звук]", "m"),
+                ("[p Назад]", "p"),
+                ("[n Далее]", "n"),
+                ("[f ♥]", "f"),
+            ],
+        )
+
     def mouse(self):
         self.mouse_changed = False
         try:
@@ -492,11 +515,19 @@ class App:
         wheel_down = state & getattr(curses, "BUTTON5_PRESSED", 0)
         clicked = state & (curses.BUTTON1_PRESSED | curses.BUTTON1_CLICKED | curses.BUTTON1_DOUBLE_CLICKED)
         self.mouse_changed = bool(clicked or wheel_up or wheel_down)
-        if self.help or self.layout_editor:
-            if self.help and (wheel_up or wheel_down):
-                self.help_offset = max(0, self.help_offset + (-3 if wheel_up else 3))
-            if clicked and self.help:
-                self.help = False
+        if clicked:
+            previous = getattr(self, "last_mouse_click", None)
+            now = time.monotonic()
+            if (
+                state & curses.BUTTON1_DOUBLE_CLICKED
+                and previous
+                and previous[:2] == (x, y)
+                and now - previous[2] < 0.5
+            ):
+                return  # A single click already opened/played this row.
+            self.last_mouse_click = (x, y, now)
+        if self.help and (wheel_up or wheel_down):
+            self.help_offset = max(0, self.help_offset + (-3 if wheel_up else 3))
             return
         for by, bx, height, width, action, value in reversed(self.hits):
             if not (by <= y < by + height and bx <= x < bx + width):
@@ -516,12 +547,20 @@ class App:
             if action == "row":
                 self.editing = False
                 self.selected = value
-                if state & curses.BUTTON1_DOUBLE_CLICKED:
-                    self.key("\n")
+                self.key("\n")
             elif action == "panel":
                 self.editing = value == "search"
             elif action == "key":
+                if value not in ("\n", "\r", curses.KEY_ENTER):
+                    self.editing = False
                 self.key(value)
+            elif action == "layout_row":
+                self.layout_selected = value
+            elif action == "seek":
+                duration_ms = (self.playback.get("item") or {}).get("duration_ms") or 0
+                if duration_ms and "command" not in self.pending:
+                    position = round((x - bx) * duration_ms / max(1, width - 1))
+                    self.command("playback", "seek", str(position))
             elif action == "volume":
                 if "command" not in self.pending:
                     self.volume = round((x - bx) * 100 / max(1, width - 1))
@@ -565,22 +604,12 @@ class App:
         width = w - 25
         filled = int(width * ms / total)
         self.progress_area = (title_y + 3, 4, width)
+        self.hit(title_y + 3, 4, 1, width, "seek", None)
         self.put(title_y + 3, 4, "━" * filled + "─" * (width - filled), 2)
         self.put(title_y + 3, width + 6, f"{duration(ms)} / {duration(total)}", 4)
-        x = 4
-        for text, key in [
-            ("[p Назад]", "p"),
-            ("[Space Ⅱ]" if active else "[Space ▶]", " "),
-            ("[n Далее]", "n"),
-            ("[f ♥]", "f"),
-            ("[-]", "-"),
-            ("[+]", "+"),
-            ("[m Звук]", "m"),
-            ("[Esc]", "\x1b"),
-        ]:
-            self.button(title_y + 5, x, text, key)
-            x += len(text) + 1
+        self.transport(title_y + 5, w)
         sy = title_y + 7
+        self.put(sy - 1, 4, "Спектр Spotify · " + self.audio.status, 4, width=w - 8)
         self.spectrum_area = (sy, 4, max(1, h - sy - 3), w - 8)
         self.spectrum(*self.spectrum_area)
         self.put(
@@ -612,7 +641,9 @@ class App:
             self.s.refresh()
             return
         player_h = (
-            7
+            6
+            if h < 25
+            else 7
             if h < 27
             else 8
             if h < 30
@@ -620,7 +651,7 @@ class App:
         )
         spectrum_h = (6 if h >= 43 else 4) if self.show_spectrum and h >= 35 else 0
         count = 4 if spectrum_h else 3
-        available = h - 7 - (count - 1)
+        available = h - 8 - (count - 1)
         heights = {
             "search": 3,
             "player": player_h,
@@ -633,26 +664,29 @@ class App:
                 getattr(self, "render_" + name)(y, w, heights[name])
                 y += heights[name] + 1
         self.box(
-            h - 4,
+            h - 5,
             1,
-            3,
+            4,
             w - 2,
             "БЕЗ ЗВУКА · + / F8 громче · m" if not self.volume else "Громкость · − / + · F7–F12 · m",
         )
-        self.hit(h - 3, 3, 1, 16, "volume", None)
+        self.hit(h - 4, 3, 1, 16, "volume", None)
         filled = round(self.volume * 16 / 100)
-        self.put(h - 3, 3, "━" * filled + "─" * (16 - filled), 2)
-        self.put(h - 3, 21, f"{self.volume:3d}%", 1, True)
-        self.put(h - 3, 30, self.notice, 4, width=w - 34)
-        self.put(
+        self.put(h - 4, 3, "━" * filled + "─" * (16 - filled), 2)
+        self.put(h - 4, 21, f"{self.volume:3d}%", 1, True)
+        self.put(h - 4, 30, self.notice, 4, width=w - 34)
+        self.transport(h - 3, w)
+        self.button_row(
             h - 1,
-            2,
-            (
-                "Enter ▶  Space Ⅱ  / поиск  f ♥  +/- звук  ? помощь  q выход"
-                if w < 110
-                else "Enter открыть/слушать  Space Ⅱ  / поиск  f ♥  n/p трек  P весь плейлист  ? помощь  q выход"
-            ),
-            3,
+            w,
+            [
+                ("[Enter Открыть]", "\n"),
+                ("[/ Поиск]", "/"),
+                ("[← Назад]", curses.KEY_LEFT),
+                ("[P Плейлист]", "P"),
+                ("[? Помощь]", "?"),
+                ("[q Выход]", "q"),
+            ],
         )
         if self.help:
             self.render_help(h, w)
@@ -733,7 +767,8 @@ class App:
             True,
             width=width,
         )
-        self.put(y + (3 if height < 11 else 5), x, artists(item), 3, width=width)
+        if height >= 7:
+            self.put(y + (3 if height < 11 else 5), x, artists(item), 3, width=width)
         if height >= 8:
             self.put(
                 y + (4 if height < 11 else 6), x, (item.get("album") or {}).get("name", ""), 7, width=width
@@ -746,6 +781,7 @@ class App:
         bar_w = max(8, width - 17)
         progress_y = y + height - (3 if height < 11 else 4)
         self.progress_area = (progress_y, x, bar_w)
+        self.hit(progress_y, x, 1, bar_w, "seek", None)
         filled = int(bar_w * progress / total)
         self.put(progress_y, x, "━" * filled, 2)
         self.put(progress_y, x + filled, "─" * (bar_w - filled), 11)
@@ -760,21 +796,26 @@ class App:
         if height >= 17:
             device = (self.playback.get("device") or {}).get("name", "tspotify")
             self.put(y + 8, x, "Устройство: " + device, 4, width=width)
-            self.put(
+            self.button_row(
                 y + 9,
-                x,
-                "⇄ "
-                + ("Перемешивание" if self.playback.get("shuffle_state") else "По порядку")
-                + " · s     ↻ "
-                + str(self.playback.get("repeat_state", "off"))
-                + " · r",
-                4,
-                width=width,
+                x + width + 2,
+                [
+                    (
+                        "[s ⇄ "
+                        + ("Перемешивание" if self.playback.get("shuffle_state") else "По порядку")
+                        + "]",
+                        "s",
+                    ),
+                    ("[r ↻ " + str(self.playback.get("repeat_state", "off")) + "]", "r"),
+                ],
+                x=x,
             )
 
     def render_spectrum(self, y, w, height):
         self.hit(y, 1, height, w - 2, "panel", "spectrum")
-        self.box(y, 1, height, w - 2, "Спектр · системный выход", self.focus_panel == "spectrum")
+        self.box(
+            y, 1, height, w - 2, "Спектр · Spotify · " + self.audio.status, self.focus_panel == "spectrum"
+        )
         self.spectrum(y + 1, 4, height - 2, w - 8)
         self.spectrum_area = (y + 1, 4, height - 2, w - 8)
 
@@ -874,6 +915,7 @@ class App:
         return thumbnail(kind, item["id"])
 
     def render_layout(self, h, w):
+        self.hits = []
         bw = min(w - 4, 78)
         bx, by = (w - bw) // 2, max(0, (h - 19) // 2)
         for yy in range(19):
@@ -881,6 +923,7 @@ class App:
         self.put(by + 1, bx + 2, "РАСКЛАДКА · порядок окон сверху вниз", 2, True)
         for i, name in enumerate(self.order):
             selected = i == self.layout_selected
+            self.hit(by + 3 + i, bx + 2, 1, bw - 4, "layout_row", i)
             self.put(
                 by + 3 + i,
                 bx + 2,
@@ -901,6 +944,19 @@ class App:
             ]
         ):
             self.put(by + 9 + i, bx + 2, line, 10, width=bw - 4)
+
+        self.button_row(
+            by + 16,
+            bx + bw,
+            [("[K Выше]", "K"), ("[J Ниже]", "J"), ("[c Обложка]", "c"), ("[v Спектр]", "v")],
+            x=bx + 2,
+        )
+        self.button_row(
+            by + 17,
+            bx + bw,
+            [("[Enter Сохранить]", "\n"), ("[d Сброс]", "d"), ("[Esc Закрыть]", "\x1b")],
+            x=bx + 2,
+        )
 
     def save_layout(self):
         CONFIG.parent.mkdir(parents=True, exist_ok=True)
@@ -988,6 +1044,7 @@ class App:
             self.put(y + j, x, "".join(pieces), color)
 
     def render_help(self, h, w):
+        self.hits = []
         lines = [
             ("/ или F2", "Ввести поисковый запрос"),
             ("Enter в поиске", "Найти музыку"),
@@ -1003,7 +1060,7 @@ class App:
             ("f", "Текущий трек: добавить / убрать ♥"),
             ("1–3 · 4–8", "Библиотека · недавние, миксы, новинки"),
             ("F3 · кнопка Плеер", "Крупная обложка и точечный спектр"),
-            ("Мышь · двойной щелчок", "Фокус / выбор · открыть или слушать"),
+            ("Щелчок мышью", "Открыть плейлист / включить трек"),
             ("o", "Открыть список треков плейлиста / альбома"),
             ("← / Backspace", "Вернуться к предыдущему списку"),
             ("s / r", "Перемешивание / повтор"),
@@ -1019,10 +1076,18 @@ class App:
         bx, by = (w - bw) // 2, max(0, (h - len(lines) - 5) // 2)
         for yy in range(len(lines) + 5):
             self.put(by + yy, bx, " " * bw, 9)
-        self.put(by + 1, bx + 2, "КЛАВИШИ · ↑/↓ прокрутка · Esc закрыть", 2, True)
+        self.put(by + 1, bx + 2, "КЛАВИШИ · ↑/↓ прокрутка", 2, True)
+        self.button(by + 1, bx + bw - 16, "[Esc Закрыть]", "\x1b")
         for i, (key, desc) in enumerate(lines):
             self.put(by + 3 + i, bx + 2, key, 10, True, width=25)
             self.put(by + 3 + i, bx + 29, desc, 9, width=bw - 31)
+
+        self.button_row(
+            by + len(lines) + 3,
+            bx + bw,
+            [("[↑ Выше]", curses.KEY_UP), ("[↓ Ниже]", curses.KEY_DOWN)],
+            x=bx + 2,
+        )
 
     def command(self, *args):
         if "command" not in self.pending:

@@ -133,7 +133,7 @@ def run(args):
     ui.cached = lambda name, default: default
     ui.cover = lambda *args: picture()
     ui.thumbnail = lambda *args: picture(24, 24)
-    ui.Audio = lambda: SimpleNamespace(
+    ui.Audio = lambda **kwargs: SimpleNamespace(
         bars=[0.3 + 0.3 * math.sin(i / 8) ** 2 for i in range(32)],
         enabled=True,
         status="DEMO / no capture",

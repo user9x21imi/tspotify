@@ -65,3 +65,85 @@ def test_real_fft_distinguishes_silence_and_a_low_frequency_tone():
     audio.update(0.6 * np.sin(2 * np.pi * 250 * np.arange(audio.n) / 32000))
     assert max(audio.bars) > 0.6
     assert np.argmax(audio.bars) < 16
+
+
+def test_spotify_capture_selects_only_the_matching_stream_and_its_sink(monkeypatch):
+    import json
+    from tspotify import audio
+
+    calls = []
+    streams = [
+        {"index": 10, "sink": 7, "properties": {"application.name": "Notifications"}},
+        {"index": 11, "sink": 8, "properties": {"application.name": "PipeWire ALSA [spotify_player]"}},
+        {"index": 12, "sink": 7, "properties": {"application.name": "Zen"}},
+    ]
+
+    def response(args, **kwargs):
+        calls.append(args)
+        return json.dumps(
+            streams
+            if args[-1] == "sink-inputs"
+            else [{"index": 7, "name": "system"}, {"index": 8, "name": "headphones"}]
+        ).encode()
+
+    monkeypatch.setattr(audio.subprocess, "check_output", response)
+    assert audio.spotify_capture_target() == (11, "headphones.monitor")
+    assert all("get-default-sink" not in args for args in calls)
+
+
+def test_absent_spotify_stream_never_falls_back_to_system_monitor(monkeypatch):
+    import json
+    from tspotify import audio
+
+    monkeypatch.setattr(
+        audio.subprocess,
+        "check_output",
+        lambda *a, **kw: json.dumps(
+            [
+                {"index": 99, "sink": 1, "properties": {"application.name": "Browser"}},
+            ]
+        ).encode(),
+    )
+    assert audio.spotify_capture_target() is None
+
+
+def test_remote_connect_does_not_capture_any_local_audio(monkeypatch):
+    import time
+    from tspotify import audio
+
+    monkeypatch.setattr(audio.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(audio.shutil, "which", lambda _: "/fake")
+    monkeypatch.setattr(
+        audio,
+        "spotify_capture_target",
+        lambda: pytest.fail("No local audio may be captured for a remote device"),
+    )
+    capture = audio.Audio(source=lambda: False)
+    try:
+        deadline = time.monotonic() + 1
+        while "внешний" not in capture.status and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert "внешний" in capture.status
+        assert capture.process is None and max(capture.bars) == 0
+    finally:
+        capture.close()
+    assert not capture.thread.is_alive()
+
+
+@pytest.mark.parametrize("system", ["Windows", "Darwin"])
+def test_windows_and_mac_never_use_a_default_system_loopback(monkeypatch, system):
+    import time
+    from tspotify import audio
+
+    monkeypatch.setattr(audio.platform, "system", lambda: system)
+    monkeypatch.delenv("TSPOTIFY_SPOTIFY_LOOPBACK", raising=False)
+    capture = audio.Audio()
+    try:
+        deadline = time.monotonic() + 1
+        while "нужен отдельный" not in capture.status and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert "нужен отдельный канал Spotify" in capture.status
+        assert max(capture.bars) == 0 and capture.process is None
+    finally:
+        capture.close()
+    assert not capture.thread.is_alive()

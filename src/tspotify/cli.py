@@ -82,11 +82,9 @@ def doctor():
     print("Login:", "saved" if paths.TOKEN_FILE.exists() else "required")
     print(
         "Spectrum:",
-        "PulseAudio/PipeWire"
-        if shutil.which("parec")
-        else "WASAPI loopback"
-        if os.name == "nt"
-        else "optional loopback input (e.g. BlackHole)",
+        "Spotify-only PulseAudio/PipeWire stream"
+        if platform.system() == "Linux" and shutil.which("parec")
+        else "dedicated Spotify channel: TSPOTIFY_SPOTIFY_LOOPBACK",
     )
     print("Fonts: use your normal monospace font; --ascii disables Unicode artwork.")
 
