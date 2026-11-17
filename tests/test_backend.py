@@ -162,3 +162,51 @@ def test_late_write_to_old_log_does_not_select_a_dead_device():
     backend._events()
     assert backend.device_id == "2222-bbbb"
     assert backend.log_path == current
+
+
+@pytest.mark.parametrize(
+    "properties",
+    [
+        {"application.process.binary": "spotify_player"},
+        {"node.name": "alsa_playback.spotify_player"},
+        {"application.name": "PipeWire ALSA [spotify_player]"},
+    ],
+)
+def test_explicit_volume_unmutes_pulse_and_pipewire_alsa_streams(monkeypatch, properties):
+    import json
+
+    calls = []
+    monkeypatch.setattr("tspotify.backend.platform.system", lambda: "Linux")
+    monkeypatch.setattr("tspotify.backend.shutil.which", lambda _: "/usr/bin/pactl")
+    monkeypatch.setattr(
+        "tspotify.backend.subprocess.check_output",
+        lambda *a, **kw: json.dumps(
+            [
+                {"index": 42, "properties": properties, "mute": True},
+                {"index": 43, "properties": {"application.name": "other app"}},
+            ]
+        ).encode(),
+    )
+    monkeypatch.setattr("tspotify.backend.subprocess.run", lambda args, **kw: calls.append(args))
+    Backend().unmute_after_user_volume(35)
+    assert calls == [
+        ["pactl", "set-sink-input-volume", "42", "100%"],
+        ["pactl", "set-sink-input-mute", "42", "0"],
+    ]
+
+
+def test_zero_volume_keeps_engine_system_stream_muted(monkeypatch):
+    import json
+
+    calls = []
+    monkeypatch.setattr("tspotify.backend.platform.system", lambda: "Linux")
+    monkeypatch.setattr("tspotify.backend.shutil.which", lambda _: "/usr/bin/pactl")
+    monkeypatch.setattr(
+        "tspotify.backend.subprocess.check_output",
+        lambda *a, **kw: json.dumps(
+            [{"index": 42, "properties": {"node.name": "alsa_playback.spotify_player"}}]
+        ).encode(),
+    )
+    monkeypatch.setattr("tspotify.backend.subprocess.run", lambda args, **kw: calls.append(args))
+    Backend().unmute_after_user_volume(0)
+    assert calls[-1] == ["pactl", "set-sink-input-mute", "42", "1"]

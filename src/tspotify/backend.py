@@ -437,7 +437,12 @@ audio_cache = true
             )
             for entry in entries:
                 props = entry.get("properties", {})
-                if "spotify_player" in props.get("application.process.binary", ""):
+                is_engine = (
+                    props.get("application.process.binary", "").rsplit("/", 1)[-1] == "spotify_player"
+                    or props.get("node.name") == "alsa_playback.spotify_player"
+                    or props.get("application.name") == "PipeWire ALSA [spotify_player]"
+                )
+                if is_engine:
                     subprocess.run(["pactl", "set-sink-input-volume", str(entry["index"]), "100%"], timeout=3)
                     subprocess.run(
                         ["pactl", "set-sink-input-mute", str(entry["index"]), "0" if volume else "1"],
