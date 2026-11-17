@@ -1,10 +1,6 @@
 <p align="center"><img src="docs/assets/banner.svg" alt="tspotify — your music, less noise" width="100%"></p>
 
-<p align="center">
-<a href="https://github.com/user9x21imi/tspotify/releases/latest/download/tspotify-linux-x86_64.zip"><img src="docs/assets/linux.svg" width="212" alt="Download for Linux"></a>
-<a href="https://github.com/user9x21imi/tspotify/releases/latest/download/tspotify-macos-arm64.zip"><img src="docs/assets/macos.svg" width="212" alt="Download for macOS"></a>
-<a href="https://github.com/user9x21imi/tspotify/releases/latest/download/tspotify-windows-x86_64.zip"><img src="docs/assets/windows.svg" width="212" alt="Download for Windows"></a>
-</p>
+
 
 <p align="center">
 <a href="https://github.com/user9x21imi/tspotify/actions/workflows/ci.yml"><img src="https://github.com/user9x21imi/tspotify/actions/workflows/ci.yml/badge.svg" alt="Tests / Linux / macOS / Windows"></a>
@@ -35,43 +31,32 @@ A keyboard-driven Spotify client with **colored dotted artwork**, tiny playlist 
 
 ## Install
 
-**Download a native build above**, unpack it, and launch `tspotify` (`tspotify.exe` on Windows; `Start tspotify.command` on macOS). The first run installs the checksum-verified streaming engine if needed. Spotify Premium is required for integrated playback.
+Native release downloads are not published yet. Install from source using **Python 3.11 or newer** with `venv` and `pip` available. The commands below install into your user directory without root/admin access or Git.
 
-Or install with one command; this installs into your own user directory, without root/admin access:
-
-**Linux / macOS**
+**Linux / macOS** — paste these three commands into your terminal:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/user9x21imi/tspotify/main/scripts/install.sh | sh
+python3 -m venv "$HOME/.local/share/tspotify/venv"
+"$HOME/.local/share/tspotify/venv/bin/python" -m pip install "https://github.com/user9x21imi/tspotify/archive/refs/heads/main.zip"
+"$HOME/.local/share/tspotify/venv/bin/tspotify"
 ```
 
-**Windows PowerShell**
+**Windows PowerShell** — with Python 3.11+ and the Python launcher (`py`) installed:
 
 ```powershell
-irm https://raw.githubusercontent.com/user9x21imi/tspotify/main/scripts/install.ps1 | iex
+py -3 -m venv "$env:LOCALAPPDATA\tspotify\venv"
+& "$env:LOCALAPPDATA\tspotify\venv\Scripts\python.exe" -m pip install "https://github.com/user9x21imi/tspotify/archive/refs/heads/main.zip"
+& "$env:LOCALAPPDATA\tspotify\venv\Scripts\tspotify.exe"
 ```
 
-macOS Intel: [download x86_64](https://github.com/user9x21imi/tspotify/releases/latest/download/tspotify-macos-x86_64.zip).
+To launch again, use the last command for your OS. Add `--demo` to preview the interface offline without an account or audio. Add `--muted` for a silent start. Integrated playback requires Spotify Premium; the verified streaming engine downloads on first use.
 
-Then run `tspotify`. Release archives and installer downloads are checked against `SHA256SUMS.txt`.
-
-Want to preview the interface before signing in? `tspotify --demo` is completely offline and never plays audio.
-
-<details><summary>Python / source installation</summary>
-
-Requires Python 3.11 or later. Install in an isolated environment:
-
-```sh
-python -m pip install --user pipx
-pipx install git+https://github.com/user9x21imi/tspotify.git
-```
-
-For development:
+<details><summary>Development installation</summary>
 
 ```sh
 git clone https://github.com/user9x21imi/tspotify.git
 cd tspotify
-python -m venv .venv
+python3 -m venv .venv
 # Activate .venv using your shell's usual command.
 python -m pip install -e '.[dev]'
 python -m pytest

@@ -3,22 +3,27 @@
 Терминальный клиент Spotify с цветными точечными обложками, мини-обложками в списках,
 плавным спектром реального аудиовыхода и настраиваемой раскладкой окон.
 
-## Установка одной командой
+## Установка
 
-Linux / macOS:
+Готовые файлы релиза пока не опубликованы. Для установки из исходников нужен **Python 3.11 или новее** с `venv` и `pip`. Git и права администратора не нужны.
+
+Linux / macOS — выполните три команды:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/user9x21imi/tspotify/main/scripts/install.sh | sh
+python3 -m venv "$HOME/.local/share/tspotify/venv"
+"$HOME/.local/share/tspotify/venv/bin/python" -m pip install "https://github.com/user9x21imi/tspotify/archive/refs/heads/main.zip"
+"$HOME/.local/share/tspotify/venv/bin/tspotify"
 ```
 
-Windows PowerShell:
+Windows PowerShell — нужен Python 3.11+ с командой `py`:
 
 ```powershell
-irm https://raw.githubusercontent.com/user9x21imi/tspotify/main/scripts/install.ps1 | iex
+py -3 -m venv "$env:LOCALAPPDATA\tspotify\venv"
+& "$env:LOCALAPPDATA\tspotify\venv\Scripts\python.exe" -m pip install "https://github.com/user9x21imi/tspotify/archive/refs/heads/main.zip"
+& "$env:LOCALAPPDATA\tspotify\venv\Scripts\tspotify.exe"
 ```
 
-Или скачайте готовую сборку на [странице релизов](https://github.com/user9x21imi/tspotify/releases/latest),
-распакуйте и запустите. В macOS внутри архива есть `Start tspotify.command`.
+Для следующего запуска повторите последнюю команду для своей ОС. Добавьте `--demo` для просмотра без аккаунта и звука или `--muted` для запуска с нулевой громкостью. Встроенное воспроизведение требует Spotify Premium; движок с проверкой контрольной суммы загрузится при первом запуске.
 
 ## Вход
 
