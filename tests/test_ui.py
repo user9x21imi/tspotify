@@ -279,3 +279,29 @@ def test_library_refresh_clamps_selection_when_remote_list_shrinks(app):
     assert app.selected == 0
     app.key("\n")
     settle(app)
+
+
+@pytest.mark.parametrize(
+    "key,expected",
+    [
+        (curses.KEY_F7, 35),
+        (curses.KEY_F8, 45),
+        (curses.KEY_F9, 35),
+        (curses.KEY_F10, 45),
+        (curses.KEY_F11, 35),
+        (curses.KEY_F12, 45),
+    ],
+)
+@pytest.mark.parametrize("mode", ["normal", "editing", "help", "layout_editor"])
+def test_function_volume_keys_work_in_all_input_modes(app, key, expected, mode):
+    app.volume = 40
+    if mode != "normal":
+        setattr(app, mode, True)
+    app.query = "keep search"
+    app.key(key)
+    settle(app)
+    assert app.volume == expected
+    assert app.test_calls[-1] == ("control", ("volume", str(expected)))
+    assert app.query == "keep search"
+    if mode != "normal":
+        assert getattr(app, mode)

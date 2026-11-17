@@ -26,6 +26,14 @@ PANEL_NAMES = {
 API = None
 ASCII_ONLY = False
 NO_SPLASH = False
+VOLUME_FUNCTION_KEYS = {
+    curses.KEY_F7: "-",
+    curses.KEY_F8: "+",
+    curses.KEY_F9: "-",
+    curses.KEY_F10: "+",
+    curses.KEY_F11: "-",
+    curses.KEY_F12: "+",
+}
 DEMO_MODE = False
 
 
@@ -477,7 +485,7 @@ class App:
             1,
             3,
             w - 2,
-            "БЕЗ ЗВУКА · + громче · m" if not self.volume else "Громкость · − / + · m",
+            "БЕЗ ЗВУКА · + / F8 громче · m" if not self.volume else "Громкость · − / + · F7–F12 · m",
         )
         filled = round(self.volume * 16 / 100)
         self.put(h - 3, 3, "━" * filled + "─" * (16 - filled), 2)
@@ -816,6 +824,7 @@ class App:
             ("Space", "Пауза / продолжить"),
             ("n / p", "Следующий / предыдущий трек"),
             ("+ / −", "Громкость ±5%"),
+            ("F7/9/11 · F8/10/12", "Тише / громче на 5%"),
             ("m", "Выключить / вернуть звук"),
             ("f", "Текущий трек: добавить / убрать ♥"),
             ("1 / 2 / 3", "Плейлисты / любимые / альбомы"),
@@ -841,12 +850,25 @@ class App:
             self.notice = "Выполняю…"
             self.submit("command", cli, *args)
 
+    def volume_key(self, k):
+        if k == "m":
+            self.muted_volume = self.volume or getattr(self, "muted_volume", 70)
+            volume = 0 if self.volume else self.muted_volume
+        else:
+            volume = max(0, min(100, self.volume + (5 if k in ("+", "=") else -5)))
+        if "command" not in self.pending:
+            self.volume = volume
+            self.command("playback", "volume", str(volume))
+
     def key(self, k):
         if k == "\x03":
             self.running = False
             return
         if k == curses.KEY_RESIZE:
             self.s.clear()
+            return
+        if k in VOLUME_FUNCTION_KEYS:
+            self.volume_key(VOLUME_FUNCTION_KEYS[k])
             return
         if self.layout_editor:
             if k in ("\x1b", "L"):
@@ -940,14 +962,7 @@ class App:
         elif k in (curses.KEY_LEFT, curses.KEY_BACKSPACE, "\x7f", "\b") and self.history:
             self.section, self.items, self.selected = self.history.pop()
         elif k in ("+", "=", "-", "m"):
-            if k == "m":
-                self.muted_volume = self.volume or getattr(self, "muted_volume", 70)
-                volume = 0 if self.volume else self.muted_volume
-            else:
-                volume = max(0, min(100, self.volume + (5 if k in ("+", "=") else -5)))
-            if "command" not in self.pending:
-                self.volume = volume
-                self.command("playback", "volume", str(volume))
+            self.volume_key(k)
         elif k in (" ", "n", "p", "s", "r"):
             self.command(
                 "playback",

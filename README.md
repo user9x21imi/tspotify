@@ -118,6 +118,7 @@ Desktop Spotify being installed is not the same as it being an available device:
 | `←`, `Backspace` | Return to the previous list |
 | `Space`, `n`, `p` | Play/pause, next, previous |
 | `+`, `-`, `m` | Volume, mute/restore |
+| `F7`/`F9`/`F11`, `F8`/`F10`/`F12` | Volume down / up by 5%, including during search and in dialogs |
 | `f` | Save / remove the current track from your library |
 | `1`, `2`, `3` | Playlists, liked tracks, albums |
 | `a` | Dots / text ASCII / block artwork |
