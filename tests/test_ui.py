@@ -82,6 +82,7 @@ def app(monkeypatch):
     yield value
     value.pool.shutdown(wait=True, cancel_futures=True)
     value.art_pool.shutdown(wait=True, cancel_futures=True)
+    value.cover_pool.shutdown(wait=True, cancel_futures=True)
 
 
 def settle(app):
@@ -563,3 +564,78 @@ def test_saved_open_playlist_and_volume_restore_into_a_new_interface(app, monkey
         if second:
             second.pool.shutdown(wait=True, cancel_futures=True)
             second.art_pool.shutdown(wait=True, cancel_futures=True)
+            second.cover_pool.shutdown(wait=True, cancel_futures=True)
+
+
+def test_rapid_volume_keys_accumulate_and_stale_poll_cannot_reverse_direction(app, monkeypatch):
+    import threading
+
+    started, release = threading.Event(), threading.Event()
+    levels = []
+
+    def slow_control(command, value):
+        levels.append(int(value))
+        if len(levels) == 1:
+            started.set()
+            release.wait(2)
+        return "volume confirmed"
+
+    monkeypatch.setattr(ui.API, "control", slow_control)
+    app.volume = 40
+    try:
+        app.key("+")
+        assert started.wait(1)
+        app.events.put(("poll", {"device": {"volume_percent": 20}}, None))
+        app.drain()
+        assert app.volume == 45
+        for _ in range(4):
+            app.key("+")
+        assert app.volume == 65
+    finally:
+        release.set()
+    settle(app)
+    assert levels == [45, 65] and app.volume == 65
+
+
+def test_global_volume_events_use_the_same_queue_even_with_search_focused(app):
+    app.volume = 40
+    app.editing = True
+    for _ in range(3):
+        app.events.put(("hotkey", "volume-up", None))
+    settle(app)
+    assert app.volume == 55
+    assert app.test_calls[-1] == ("control", ("volume", "55"))
+    assert app.editing
+
+
+def test_current_cover_does_not_wait_for_busy_thumbnail_workers(app, monkeypatch):
+    import threading
+
+    release = threading.Event()
+
+    def blocked():
+        release.wait(2)
+        return []
+
+    monkeypatch.setattr(ui, "cover", lambda *args: [[(1, 2, 3)]])
+    try:
+        for index in range(4):
+            app.submit(f"thumb:blocked{index}", blocked)
+        app.track_cover({"album": {"images": [{"url": "https://i.scdn.co/image/cover", "width": 300}]}})
+        deadline = time.monotonic() + 1
+        while not app.art and time.monotonic() < deadline:
+            app.drain()
+            time.sleep(0.005)
+        assert app.art == [[(1, 2, 3)]]
+        assert any(key.startswith("thumb:") for key in app.pending)
+    finally:
+        release.set()
+    settle(app)
+
+
+def test_cover_raster_is_cached_across_metadata_and_volume_redraws(app):
+    image = [[(90, 150, 200)] * 32 for _ in range(32)]
+    app.dot_image(image, 2, 2, 20, 10)
+    entry = app.dot_cache[(id(image), 20, 10, False)]
+    app.dot_image(image, 3, 3, 20, 10)
+    assert app.dot_cache[(id(image), 20, 10, False)] is entry

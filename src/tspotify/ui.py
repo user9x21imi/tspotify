@@ -10,7 +10,7 @@ import sys
 import time
 
 from . import paths
-from .art import cover, logo, thumbnail
+from .art import cover, logo, thumbnail, image_url
 from .audio import Audio
 
 HOME = paths.HOME
@@ -86,7 +86,8 @@ class App:
         except (AttributeError, TypeError):
             pass
         self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=4)
-        self.art_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+        self.art_pool = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+        self.cover_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         self.events = queue.Queue()
         API.on_status = lambda message: self.events.put(("notice", message, None))
         self.pending = set()
@@ -101,6 +102,7 @@ class App:
         self.updated = time.monotonic()
         self.art_url = ""
         self.art = []
+        self.dot_cache = OrderedDict()
         self.art_mode = "dots"
         self.native_supported = False
         self.native_last = None
@@ -150,6 +152,7 @@ class App:
         self.notice = "Готово · / — поиск, ? — все клавиши"
         self.running = True
         self.volume = getattr(API, "current_volume", 0)
+        self.volume_local_until = 0.0
         self.muted_volume = getattr(API, "resume_data", {}).get("unmuted_volume", 35)
         self.audio = Audio(source=lambda: bool(API.backend and not getattr(API, "external", False)))
         self.colors = {}
@@ -199,6 +202,7 @@ class App:
         else:
             self.restore_selected_row()
         self.fullscreen = bool(self.resume_view.get("fullscreen", False))
+        self.track_cover(self.playback.get("item") or {})
 
     def restore_selected_row(self):
         view = self.restore_selection
@@ -265,7 +269,7 @@ class App:
             except Exception as exc:
                 self.events.put((key, None, str(exc)))
 
-        pool = self.art_pool if key.startswith("thumb:") or key == "cover" else self.pool
+        pool = self.cover_pool if key == "cover" else self.art_pool if key.startswith("thumb:") else self.pool
         pool.submit(run)
 
     def library(self, section):
@@ -302,6 +306,18 @@ class App:
                 break
             changed = True
             self.pending.discard(key)
+            if key == "hotkey":
+                self.volume_key({"volume-up": "+", "volume-down": "-", "mute": "m"}[value])
+                continue
+            if key == "volume":
+                if error:
+                    self.notice = "Не удалось изменить громкость: " + error[:130]
+                else:
+                    requested, message = value
+                    self.notice = message
+                    if self.volume != requested:
+                        self.send_volume()
+                continue
             if key == "notice":
                 self.notice = value
                 continue
@@ -359,15 +375,13 @@ class App:
             if key == "poll":
                 self.playback = value or {}
                 self.updated = time.monotonic()
-                self.volume = (self.playback.get("device") or {}).get("volume_percent") or 0
+                if "volume" not in self.pending and time.monotonic() >= self.volume_local_until:
+                    level = (self.playback.get("device") or {}).get("volume_percent")
+                    if level is not None:
+                        self.volume = level
                 if time.monotonic() - self.last_checkpoint > 5:
                     self.checkpoint()
-                images = ((self.playback.get("item") or {}).get("album") or {}).get("images", [])
-                url = images[0]["url"] if images else ""
-                if url != self.art_url:
-                    self.art_url, self.art = url, []
-                    if url:
-                        self.submit("cover", lambda u=url: (u, cover(u, 256, 256)))
+                self.track_cover(self.playback.get("item") or {})
             elif key == "cover":
                 url, image = value
                 if url == self.art_url:
@@ -409,6 +423,7 @@ class App:
                 self.notice = f"Треков: {len(self.items)} · Enter слушать · ← назад"
             elif key == "command":
                 self.notice = value if isinstance(value, str) else "Команда подтверждена"
+                self.track_cover((getattr(API, "last_playback", {}) or {}).get("item") or {})
             elif key == "favorite":
                 track_id, was_liked, track = self.like_target
                 if isinstance(value, bool):
@@ -484,6 +499,14 @@ class App:
         return self.colors.get(key, 4)
 
     def dot_image(self, image, y, x, width, height, logo=False):
+        cache_key = (id(image), width, height, logo)
+        cached_cells = self.dot_cache.get(cache_key)
+        if cached_cells:
+            self.dot_cache.move_to_end(cache_key)
+            for yy, xx, glyph, color in cached_cells[1]:
+                self.put(y + yy, x + xx, glyph, color)
+            return
+        cells = []
         rows, cols = len(image), len(image[0])
         positions = [
             (0, 0, 1),
@@ -524,9 +547,15 @@ class App:
                         self.init_pair(self.next_color, idx, -1)
                         self.colors[key] = self.next_color
                         self.next_color += 1
-                    self.put(y + yy, x + xx, chr(0x2800 + bits), self.colors.get(key, 3))
+                    color = self.colors.get(key, 3)
+                    cells.append((yy, xx, chr(0x2800 + bits), color))
+                    self.put(y + yy, x + xx, chr(0x2800 + bits), color)
                 else:
+                    cells.append((yy, xx, " ", 1))
                     self.put(y + yy, x + xx, " ")
+        self.dot_cache[cache_key] = (image, cells)
+        while len(self.dot_cache) > 8:
+            self.dot_cache.popitem(last=False)
 
     def box(self, y, x, height, width, title="", active=False):
         if height < 3 or width < 4:
@@ -627,9 +656,7 @@ class App:
                     position = round((x - bx) * duration_ms / max(1, width - 1))
                     self.command("playback", "seek", str(position))
             elif action == "volume":
-                if "command" not in self.pending:
-                    self.volume = round((x - bx) * 100 / max(1, width - 1))
-                    self.command("playback", "volume", str(self.volume))
+                self.set_volume(round((x - bx) * 100 / max(1, width - 1)))
             return
 
     def render_fullscreen(self, h, w):
@@ -946,7 +973,7 @@ class App:
                 else:
                     self.put(yy + 1, 5, "······", 11)
                     thumb_jobs = sum(x.startswith("thumb:") for x in self.pending)
-                    if key not in self.thumbnails and thumb_jobs < 2:
+                    if key not in self.thumbnails and thumb_jobs < 4:
                         self.submit("thumb:" + key, self.load_thumbnail, kind, data)
                 tx = 13
             owner = data.get("owner") or [""]
@@ -1159,15 +1186,32 @@ class App:
             self.notice = "Выполняю…"
             self.submit("command", cli, *args)
 
+    def track_cover(self, item):
+        images = (item.get("album") or {}).get("images") or item.get("images") or []
+        url = image_url(images, 256)
+        if url != self.art_url:
+            self.art_url, self.art = url, []
+            if url:
+                self.submit("cover", lambda u=url: (u, cover(u, 256, 256)))
+
+    def send_volume(self):
+        if "volume" not in self.pending:
+            target = self.volume
+            self.submit("volume", lambda: (target, API.control("volume", str(target))))
+
+    def set_volume(self, value):
+        self.volume = max(0, min(100, int(value)))
+        self.volume_local_until = time.monotonic() + 12
+        self.notice = f"Громкость: {self.volume}%"
+        self.send_volume()
+
     def volume_key(self, k):
         if k == "m":
-            self.muted_volume = self.volume or getattr(self, "muted_volume", 70)
+            self.muted_volume = self.volume or getattr(self, "muted_volume", 35)
             volume = 0 if self.volume else self.muted_volume
         else:
-            volume = max(0, min(100, self.volume + (5 if k in ("+", "=") else -5)))
-        if "command" not in self.pending:
-            self.volume = volume
-            self.command("playback", "volume", str(volume))
+            volume = self.volume + (5 if k in ("+", "=") else -5)
+        self.set_volume(volume)
 
     def key(self, k):
         if k in ("\x03", "\x11"):
@@ -1297,7 +1341,14 @@ class App:
         next_frame = 0
         dirty = True
         mouse_tracking = False
+        controls = None
         try:
+            if not DEMO_MODE:
+                from .control import ControlServer
+
+                controls = ControlServer(lambda action: self.events.put(("hotkey", action, None)))
+                if controls.shortcut_error:
+                    self.notice = "Системные F-клавиши: " + controls.shortcut_error
             # Raw mode delivers Ctrl+Q instead of consuming it as XON flow control.
             curses.raw()
             try:
@@ -1334,10 +1385,11 @@ class App:
                     self.key(key)
                     if key != curses.KEY_MOUSE or self.mouse_changed:
                         dirty = True
-                        next_frame = 0
                 except curses.error:
                     pass
         finally:
+            if controls:
+                controls.close()
             self.checkpoint()
             if mouse_tracking:
                 sys.stdout.write("\x1b[?1003l")
@@ -1349,3 +1401,4 @@ class App:
             self.audio.close()
             self.pool.shutdown(wait=False, cancel_futures=True)
             self.art_pool.shutdown(wait=False, cancel_futures=True)
+            self.cover_pool.shutdown(wait=False, cancel_futures=True)

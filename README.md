@@ -178,3 +178,11 @@ The expanded player uses 256×256 artwork and a real dotted spectrum. Mouse trac
 Normal launches restore the last chosen volume, current track and position, open library section or playlist, selected row, search text and expanded-player view. Playback opens **paused**; press Space to continue from the saved position. The last nonzero volume is remembered for mute/restore too. A first launch uses 35% rather than forcing zero.
 
 State is checkpointed while the UI runs and saved again on exit, including Ctrl+Q and normal terminal-close handling. `--muted` temporarily starts at zero and never overwrites the ordinary saved session; demo mode is separate as well. An already active external Spotify Connect device keeps its own live playback state. Session data lives in the private configuration directory shown by `tspotify doctor`.
+
+### Volume keys with the terminal minimized
+
+In KDE Plasma, run `tspotify install-shortcuts` once, then restart the client. F7/F9/F11 decrease Spotify volume by 5%; F8/F10/F12 increase it by 5%, including while the terminal is minimized or another application has focus. The shortcuts belong to Spotify only while its interface is running and are released on normal exit. Existing shortcuts owned by other applications are not overwritten. Disable with `tspotify install-shortcuts --remove`.
+
+Other desktop environments can bind their shortcut settings to `tspotify control volume-up`, `tspotify control volume-down`, and `tspotify control mute`. These commands only contact the running client; they never launch a player or open login. Automatic global-key setup is currently KDE-specific. Ordinary terminal input alone cannot receive keys while unfocused.
+
+Volume presses are accumulated locally and serialized/coalesced to the newest requested value; stale playback polls do not replace that value. Current artwork has a separate worker from list thumbnails, selects a suitably sized CDN image, and caches the rendered dotted cells rather than recalculating them on every volume redraw.

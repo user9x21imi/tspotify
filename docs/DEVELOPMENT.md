@@ -45,3 +45,5 @@ python scripts/check_spectrum_isolation.py
 ```
 
 The check creates its own null sink, sends two different tones to two separate streams, and confirms that the per-stream monitor contains only the selected tone. It never changes the default sink or connects the test sink to hardware, and removes its owned streams/module afterwards. Run only where PulseAudio/PipeWire and `pactl`, `parec`, `paplay` are available.
+
+Desktop control uses an authenticated localhost endpoint in `control.py`, with private, ephemeral `DATA/control.json` metadata. Never include that token/file in bundles. KDE registration in `shortcuts.py` is opt-in, checks existing ownership and releases its F7–F12 bindings on normal client exit. Commands enter the UI event queue and share the same coalesced volume worker as mouse and keyboard input. Test with a mock receiver to avoid changing audible playback.

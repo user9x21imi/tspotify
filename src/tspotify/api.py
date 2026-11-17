@@ -45,6 +45,9 @@ class Spotify:
         self.resume_data = session.load()
         self.session_muted = False
         self._runtime_volume = None
+        self._volume_until = 0.0
+        self._volume_lock = threading.RLock()
+        self._volume_revision = 0
         self.idle = True
         self.last_playback = {
             "item": self.resume_data.get("track"),
@@ -183,6 +186,11 @@ class Spotify:
                             "is_playing": False,
                             "device": {**(value.get("device") or {}), "volume_percent": self.current_volume},
                         }
+                    if self._runtime_volume is not None and time.monotonic() < self._volume_until:
+                        value = {
+                            **value,
+                            "device": {**(value.get("device") or {}), "volume_percent": self._runtime_volume},
+                        }
                     self.last_playback = value
                     return value
             except (OSError, TimeoutError):
@@ -190,6 +198,14 @@ class Spotify:
         if force or time.monotonic() - self._last_remote_poll > 4:
             self.last_playback = self.request("GET", "me/player") or {}
             self._last_remote_poll = time.monotonic()
+        if self._runtime_volume is not None and time.monotonic() < self._volume_until:
+            return {
+                **self.last_playback,
+                "device": {
+                    **(self.last_playback.get("device") or {}),
+                    "volume_percent": self._runtime_volume,
+                },
+            }
         return self.last_playback
 
     def device_query(self):
@@ -261,6 +277,7 @@ class Spotify:
             self.recover_device(force=True)
 
     def start(self, item, context_uri=None, position_ms=0):
+        volume_revision = self._volume_revision
         self.ensure_engine()
         item = dict(item)
         if not item.get("duration_ms") and isinstance(item.get("duration"), dict):
@@ -326,10 +343,15 @@ class Spotify:
                 "device": {"id": self.device_id, "name": "tspotify", "volume_percent": self.current_volume},
             }
             self.idle = False
-            volume = getattr(self.backend, "preferred_volume", self.current_volume)
-            if volume > 0 and not getattr(self.backend, "muted", True):
-                self.control("volume", volume)
-                self.last_playback["device"]["volume_percent"] = volume
+            with self._volume_lock:
+                volume = getattr(self.backend, "preferred_volume", self.current_volume)
+                if (
+                    self._volume_revision == volume_revision
+                    and volume > 0
+                    and not getattr(self.backend, "muted", True)
+                ):
+                    self.control("volume", volume)
+                self.last_playback["device"]["volume_percent"] = self.current_volume
             self.save_session(self.last_playback, volume=self.current_volume)
             return "Воспроизводится: " + item.get("name", "трек")
         deadline = time.monotonic() + 12
@@ -343,6 +365,12 @@ class Spotify:
         raise SpotifyError("Spotify принял запрос, но запуск выбранного трека не подтверждён.")
 
     def control(self, command, value=None, _retry=False):
+        if command == "volume":
+            with self._volume_lock:
+                return self._checked_control(command, value, _retry)
+        return self._checked_control(command, value, _retry)
+
+    def _checked_control(self, command, value=None, _retry=False):
         try:
             return self._control(command, value)
         except SpotifyError as error:
@@ -367,6 +395,7 @@ class Spotify:
         if command == "play-pause":
             command = "pause" if self.playback().get("is_playing") else "play"
         if command == "volume":
+            self._volume_revision += 1
             value = max(0, min(100, int(value)))
             self.request("PUT", f"me/player/volume?volume_percent={value}&{device}")
             if self.backend:
@@ -377,6 +406,7 @@ class Spotify:
                     self.backend.muted = False
                 self.backend.unmute_after_user_volume(value)
             self._runtime_volume = value
+            self._volume_until = time.monotonic() + 12
             self.save_session(volume=value)
             return f"Громкость: {value}%"
         if command == "seek":

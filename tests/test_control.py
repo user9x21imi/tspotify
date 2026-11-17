@@ -1,0 +1,68 @@
+import json
+import socket
+
+import pytest
+
+from tspotify import control, shortcuts
+
+
+def test_background_command_reaches_the_running_client_and_closes_cleanly():
+    received = []
+    server = control.ControlServer(received.append)
+    try:
+        control.send("volume-up")
+        control.send("volume-down")
+        assert received == ["volume-up", "volume-down"]
+        metadata = json.loads(server.metadata.read_text())
+        with socket.create_connection(("127.0.0.1", metadata["port"]), timeout=1) as connection:
+            connection.sendall(b'{"action":"volume-up","token":"wrong"}\n')
+            assert not json.loads(connection.makefile("rb").readline())["ok"]
+        assert len(received) == 2
+    finally:
+        server.close()
+    assert not server.metadata.exists()
+    with pytest.raises(RuntimeError, match="не запущен"):
+        control.send("volume-up")
+
+
+def test_background_control_does_not_trigger_browser_login(monkeypatch):
+    from tspotify import cli
+
+    received = []
+    server = control.ControlServer(received.append)
+    monkeypatch.setattr(cli.auth, "access_token", lambda: pytest.fail("control must not log in"))
+    try:
+        cli.main(["control", "volume-up"])
+        assert received == ["volume-up"]
+    finally:
+        server.close()
+
+
+def test_global_shortcut_setup_refuses_keys_owned_by_other_programs(monkeypatch):
+    calls = []
+    monkeypatch.setattr(shortcuts.shutil, "which", lambda _: "/fake/gdbus")
+
+    def call(method, *args):
+        calls.append(method)
+        return "(false,)" if method == "isGlobalShortcutAvailable" else "(['another.desktop', '_launch'],)"
+
+    monkeypatch.setattr(shortcuts, "call", call)
+    with pytest.raises(RuntimeError, match="уже используется"):
+        shortcuts.set_active(True)
+    assert "setShortcut" not in calls
+
+
+def test_own_shortcut_registration_can_be_refreshed(monkeypatch):
+    monkeypatch.setattr(shortcuts.shutil, "which", lambda _: "/fake/gdbus")
+
+    def call(method, *args):
+        if method == "isGlobalShortcutAvailable":
+            return "(false,)"
+        if method == "action":
+            code = int(args[0])
+            action = "volume-down" if (code - 0x01000030 + 1) % 2 else "volume-up"
+            return f"(['tspotify-{action}.desktop', '_launch'],)"
+        return "()"
+
+    monkeypatch.setattr(shortcuts, "call", call)
+    assert shortcuts.set_active(True)

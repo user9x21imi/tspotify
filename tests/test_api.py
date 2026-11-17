@@ -460,3 +460,32 @@ def test_seek_uses_the_selected_device_and_clamps_negative_positions(api):
     mock(api, lambda request: urls.append(str(request.url)) or httpx.Response(204))
     api.control("seek", -100)
     assert "position_ms=0&device_id=selected" in urls[0]
+
+
+def test_stale_device_snapshot_does_not_replace_recent_volume_change(api):
+    api.idle = False
+    api.device_id = "d"
+    api.backend = SimpleNamespace(
+        device_id="d",
+        playback=lambda fallback: {"device": {"volume_percent": 20}},
+        unmute_after_user_volume=lambda v: None,
+    )
+    mock(api, lambda request: httpx.Response(204))
+    api.control("volume", 65)
+    assert api.playback()["device"]["volume_percent"] == 65
+
+
+def test_track_start_does_not_overwrite_new_user_volume_with_old_preference(api):
+    calls = []
+    mock(api, lambda request: calls.append(str(request.url)) or httpx.Response(204))
+    api.backend = SimpleNamespace(
+        device_id="d",
+        muted=False,
+        preferred_volume=35,
+        _events=lambda: None,
+        wait_playing=lambda *a, **kw: api.control("volume", 65),
+        unmute_after_user_volume=lambda v: None,
+    )
+    api.start({"id": "t"})
+    volumes = [url for url in calls if "/volume?" in url]
+    assert len(volumes) == 1 and "volume_percent=65" in volumes[0]

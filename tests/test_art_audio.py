@@ -147,3 +147,10 @@ def test_windows_and_mac_never_use_a_default_system_loopback(monkeypatch, system
     finally:
         capture.close()
     assert not capture.thread.is_alive()
+
+
+def test_cover_uses_a_sufficient_resolution_without_downloading_the_largest_image():
+    images = [{"url": "big", "width": 640}, {"url": "medium", "width": 300}, {"url": "thumb", "width": 64}]
+    assert art.image_url(images, 256) == "medium"
+    assert art.image_url(images, 24) == "thumb"
+    assert art.image_url(images, 900) == "big"

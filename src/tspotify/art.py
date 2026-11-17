@@ -13,8 +13,29 @@ from PIL import Image, ImageDraw
 
 from . import paths
 
-_http = httpx.Client(http2=True, follow_redirects=True, timeout=10)
+_http = httpx.Client(
+    http2=True,
+    follow_redirects=True,
+    timeout=httpx.Timeout(6, connect=3, pool=2),
+    limits=httpx.Limits(max_connections=8, max_keepalive_connections=8),
+)
 _meta_lock = threading.Lock()
+
+
+def image_url(images, size=256):
+    entries = [entry for entry in images if isinstance(entry, dict) and entry.get("url")]
+    if not entries:
+        return ""
+    measured = [entry for entry in entries if isinstance(entry.get("width"), int) and entry["width"] > 0]
+    if not measured:
+        return entries[0]["url"]
+    adequate = [entry for entry in measured if entry["width"] >= size]
+    chosen = (
+        min(adequate, key=lambda entry: entry["width"])
+        if adequate
+        else max(measured, key=lambda entry: entry["width"])
+    )
+    return chosen["url"]
 
 
 def allowed_image(url):

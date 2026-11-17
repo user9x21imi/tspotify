@@ -30,3 +30,5 @@ not credentials.
 **Unsigned downloaded binary.** macOS/Windows may request OS approval. The installer never disables
 Gatekeeper, SmartScreen, certificate validation or system protections.
 
+
+**F7–F12 do nothing when minimized.** A terminal does not receive unfocused input. On KDE, run `tspotify install-shortcuts` once and restart. The client reports an ownership conflict if another desktop action uses the key. On other desktops, assign `tspotify control volume-up/down` commands using their shortcut settings. The foreground client must be running; these controls do not autostart it.

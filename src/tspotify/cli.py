@@ -105,6 +105,14 @@ def parser():
     login_parser.add_argument(
         "--qr", dest="login_qr", action="store_true", help="show QR; paste the callback URL from your phone"
     )
+    shortcuts_parser = sub.add_parser(
+        "install-shortcuts", help="enable KDE F7-F12 controls while the client runs"
+    )
+    shortcuts_parser.add_argument("--remove", action="store_true", help="disable desktop shortcuts")
+    control_parser = sub.add_parser(
+        "control", help="control the running client without focusing its terminal"
+    )
+    control_parser.add_argument("action", choices=("volume-up", "volume-down", "mute"))
     sub.add_parser("update", help="check and install a release update after confirmation")
     sub.add_parser("doctor", help="show diagnostics without printing tokens")
     sub.add_parser("devices", help="list available Spotify Connect devices")
@@ -114,6 +122,21 @@ def parser():
 
 def run(args):
     paths.prepare()
+    if args.command == "install-shortcuts":
+        from .shortcuts import install
+
+        install(remove=args.remove)
+        print(
+            "Системные сочетания отключены."
+            if args.remove
+            else "F7–F12 будут работать глобально при следующем запуске tspotify."
+        )
+        return
+    if args.command == "control":
+        from .control import send
+
+        send(args.action)
+        return
     if args.command == "update":
         from .updates import offer
 

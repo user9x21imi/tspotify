@@ -2,6 +2,10 @@
 
 ## 0.1.0
 
+- Coalesced volume updates preserve rapid presses and reject stale poll levels; track startup cannot overwrite a newer user volume.
+- Optional KDE F7–F12 desktop bindings and authenticated local control work without terminal focus and release keys on exit.
+- Prioritized current-cover loading, appropriately sized CDN images and cached dotted rasters reduce artwork delays.
+
 - Persistent volume, track/position and library view; explicit Space resumes the saved position without startup autoplay.
 - Ctrl+Q exits from every input mode and saves the session; muted tests and demos preserve ordinary preferences.
 
