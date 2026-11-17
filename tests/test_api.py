@@ -314,7 +314,7 @@ def test_volume_404_uses_recovery_before_retrying_command(api, monkeypatch):
     )
 
     def recover(force=False):
-        assert force
+        assert not force
         api.backend.device_id = "new"
 
     monkeypatch.setattr(api, "recover_device", recover)

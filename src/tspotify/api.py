@@ -380,7 +380,7 @@ class Spotify:
                 raise SpotifyError(
                     "Выбранное устройство Spotify отключилось. Откройте его и повторите команду.", status=404
                 ) from None
-            self.recover_device(force=True)
+            self.recover_device(force=False)
             return self.control(command, value, _retry=True)
 
     def _control(self, command, value=None):
