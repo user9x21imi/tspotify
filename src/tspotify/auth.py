@@ -27,6 +27,7 @@ SCOPES = " ".join(
         "playlist-read-collaborative",
         "user-follow-read",
         "user-top-read",
+        "user-read-recently-played",
         "streaming",
     ]
 )

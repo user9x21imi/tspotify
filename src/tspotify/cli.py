@@ -160,6 +160,17 @@ def run(args):
                 selected = None
             if selected:
                 print("Spotify Connect:", selected["name"], flush=True)
+
+            def create_backend():
+                return Backend(
+                    muted=args.muted,
+                    on_authorize=lambda url: engine_authorize(
+                        url, qr=args.qr, ready=lambda: api.backend.ready()
+                    ),
+                )
+
+            if args.device == "auto":
+                api.backend_factory = create_backend
             if not api.external:
                 backend = Backend(
                     muted=args.muted,
@@ -185,8 +196,9 @@ def run(args):
     finally:
         # Stop our own stream even when an exception or Ctrl+C closes the interface.
         # An already-running desktop Spotify is a separate, user-owned device.
-        if backend:
-            backend.close()
+        owned_backend = getattr(api, "backend", None) or backend
+        if owned_backend:
+            owned_backend.close()
         api.close()
 
 

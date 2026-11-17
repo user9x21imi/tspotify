@@ -121,6 +121,9 @@ Desktop Spotify being installed is not the same as it being an available device:
 | `F7`/`F9`/`F11`, `F8`/`F10`/`F12` | Volume down / up by 5%, including during search and in dialogs |
 | `f` | Save / remove the current track from your library |
 | `1`, `2`, `3` | Playlists, liked tracks, albums |
+| `4`, `5`, `6`, `7`, `8` | Recent history, saved Spotify mixes, new releases, recommendations, saved daily mixes |
+| `F3`, expand button, cover click | Expanded artwork, track details and a smooth dotted spectrum; F3/Esc returns |
+| Mouse | Hover focuses panels; click selects, double-click opens/plays, wheel scrolls; tabs and controls are clickable |
 | `a` | Dots / text ASCII / block artwork |
 | `s`, `r` | Shuffle, repeat |
 | `L` | Layout editor: arrows select, `K`/`J` move, `c` swaps cover side, `v` toggles spectrum, Enter saves |
@@ -174,3 +177,11 @@ Independent project, not affiliated with Spotify. Streaming uses [spotify_player
 Installed release builds check GitHub once a day before opening the player. A new stable release displays its version and asks `Install update? [y/N]`. Nothing installs unless you confirm. Downloads are pinned to that release and checked against its SHA-256 manifest. Spotify login and preferences are preserved. Restart `tspotify` after installation. Network failures never prevent opening the player.
 
 Run `tspotify update` to check manually. Source checkouts keep their development environment unchanged unless you explicitly invoke this command.
+
+### Discovery sections
+
+Recent history includes available playlist/album contexts and unique recently played tracks. New releases and recommendations use Spotify data, with recommendations seeded by your own top tracks. Your Mixes and Daily Mixes show Spotify mixes saved in your library: save the desired mix in the official app to make it available here. These do not duplicate Spotify's private Home feed or pre-save countdowns. Availability depends on the authorization/API access granted by Spotify; restricted endpoints show an explanation rather than unrelated replacement content.
+
+The expanded player uses 256×256 artwork and a real dotted spectrum. Mouse tracking is enabled only while the interface is open. Hold Shift when selecting text if your terminal reserves normal mouse actions for the application.
+
+[Russian prompt for a separate SoundCloud project](docs/SOUNDCLOUD_PROMPT.ru.md).

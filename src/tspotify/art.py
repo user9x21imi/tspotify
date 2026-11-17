@@ -23,7 +23,7 @@ def allowed_image(url):
     return parsed.scheme == "https" and (host.endswith(".scdn.co") or host.endswith(".spotifycdn.com"))
 
 
-@functools.lru_cache(maxsize=48)
+@functools.lru_cache(maxsize=16)
 def cover(url, width=128, height=128):
     if not allowed_image(url):
         return []

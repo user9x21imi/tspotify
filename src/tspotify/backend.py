@@ -171,6 +171,9 @@ class Backend:
             except ValueError:
                 raise RuntimeError("Встроенный плеер вернул повреждённые данные воспроизведения.") from None
 
+    def alive(self):
+        return self.pty.isalive() if self.pty else bool(self.process and self.process.poll() is None)
+
     def ready(self):
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:

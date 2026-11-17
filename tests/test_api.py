@@ -184,7 +184,8 @@ def test_first_play_waits_for_connect_device_registration(api, monkeypatch):
     api.device_id = "device"
     api.backend = SimpleNamespace(_events=lambda: None, wait_playing=lambda *a, **k: None)
     assert "Воспроизводится" in api.start({"id": "track"})
-    assert len(calls) == 2
+    assert len(calls) == 3
+    assert json.loads(calls[1].content) == {"device_ids": ["device"], "play": False}
 
 
 def test_missing_connect_registration_restarts_engine_and_uses_new_device(api, monkeypatch):
@@ -278,3 +279,176 @@ def test_corrupt_library_cache_is_refetched(api):
     (paths.CACHE / "library-playlist.json").write_text(" ", encoding="utf-8")
     mock(api, lambda request: httpx.Response(200, json={"items": [{"id": "p"}]}))
     assert api.library("Плейлисты") == ("Плейлисты", [("playlist", {"id": "p"})])
+
+
+def test_inactive_external_devices_are_not_auto_selected(api):
+    mock(
+        api,
+        lambda request: httpx.Response(
+            200, json={"devices": [{"id": "gone", "name": "Laptop", "is_active": False}]}
+        ),
+    )
+    assert api.select_device("auto") is None
+    assert not api.external
+
+
+def test_volume_404_uses_recovery_before_retrying_command(api, monkeypatch):
+    urls = []
+
+    def handler(request):
+        urls.append(str(request.url))
+        return (
+            httpx.Response(404, json={"error": {"message": "Device not found"}})
+            if len(urls) == 1
+            else httpx.Response(204)
+        )
+
+    mock(api, handler)
+    api.device_id = "old"
+    api.backend = SimpleNamespace(
+        device_id="old",
+        preferred_volume=0,
+        _volume_set_at=0,
+        _snapshot_time=0,
+        unmute_after_user_volume=lambda v: None,
+    )
+
+    def recover(force=False):
+        assert force
+        api.backend.device_id = "new"
+
+    monkeypatch.setattr(api, "recover_device", recover)
+    assert api.control("volume", 0) == "Громкость: 0%"
+    assert "device_id=old" in urls[0] and "device_id=new" in urls[1]
+
+
+def test_auto_external_disconnect_can_create_a_silent_owned_engine(api, monkeypatch):
+    restarted = []
+    backend = SimpleNamespace(
+        device_id="new",
+        muted=True,
+        _events=lambda: None,
+        wait_playing=lambda *a, **kw: None,
+        restart=lambda: restarted.append(True),
+    )
+    api.backend_factory = lambda: backend
+    api.device_id, api.external = "gone", True
+    monkeypatch.setattr(api, "devices", lambda: [{"id": "new", "name": "tspotify"}])
+    monkeypatch.setattr("tspotify.api.time.sleep", lambda _: None)
+    mock(
+        api,
+        lambda request: (
+            httpx.Response(404, json={"error": {"message": "Device not found"}})
+            if "gone" in str(request.url)
+            else httpx.Response(204)
+        ),
+    )
+    assert "Воспроизводится" in api.start({"id": "t"})
+    assert api.backend is backend and not api.external and restarted
+
+
+def test_recent_history_keeps_contexts_and_unique_tracks(api):
+    def handler(request):
+        if "/recently-played" in str(request.url):
+            entry = {"track": {"id": "t", "type": "track"}, "context": {"uri": "spotify:playlist:p"}}
+            return httpx.Response(200, json={"items": [entry, entry]})
+        return httpx.Response(200, json={"items": [{"id": "p", "name": "Recent playlist"}]})
+
+    mock(api, handler)
+    section, items = api.library("Недавние")
+    assert section == "Недавние"
+    assert [(kind, item["id"]) for kind, item in items] == [("playlist", "p"), ("track", "t")]
+
+
+@pytest.mark.parametrize("section,expected", [("Ваши миксы", ["mix", "daily"]), ("Миксы дня", ["daily"])])
+def test_mix_tabs_only_show_real_saved_spotify_mixes(api, section, expected):
+    playlists = [
+        {"id": "mix", "name": "Indie Mix", "owner": {"id": "spotify"}},
+        {"id": "daily", "name": "Daily Mix 1", "owner": {"id": "spotify"}},
+        {"id": "ordinary", "name": "Evening", "owner": {"id": "spotify"}},
+        {"id": "fan", "name": "Daily Mix fake", "owner": {"id": "fan"}},
+    ]
+    mock(api, lambda request: httpx.Response(200, json={"items": playlists}))
+    assert [item["id"] for _, item in api.library(section)[1]] == expected
+
+
+def test_new_releases_are_openable_albums(api):
+    mock(
+        api,
+        lambda request: httpx.Response(
+            200, json={"albums": {"items": [{"id": "new", "name": "New release"}]}}
+        ),
+    )
+    assert api.library("Новые релизы")[1] == [("album", {"id": "new", "name": "New release"})]
+
+
+def test_recommendations_are_seeded_by_the_users_actual_top_tracks(api):
+    calls = []
+
+    def handler(request):
+        calls.append(str(request.url))
+        if "/me/top/tracks" in str(request.url):
+            return httpx.Response(200, json={"items": [{"id": "seed"}]})
+        return httpx.Response(200, json={"tracks": [{"id": "recommended", "name": "For you"}]})
+
+    mock(api, handler)
+    assert api.library("Рекомендации")[1][0][1]["id"] == "recommended"
+    assert "seed_tracks=seed" in calls[-1]
+
+
+def test_restricted_discovery_is_not_substituted_with_fake_music(api):
+    mock(api, lambda request: httpx.Response(403, json={"error": {"message": "unavailable"}}))
+    with pytest.raises(SpotifyError, match="недоступен для этого входа"):
+        api.library("Новые релизы")
+
+
+def test_dead_engine_is_recovered_before_sending_playback_command(api, monkeypatch):
+    calls = []
+    backend = SimpleNamespace(
+        alive=lambda: False, device_id="dead", _events=lambda: None, wait_playing=lambda *a, **kw: None
+    )
+    api.backend = backend
+
+    def recover(force=False):
+        assert force
+        calls.append("recover")
+        backend.alive = lambda: True
+        backend.device_id = "new"
+
+    monkeypatch.setattr(api, "recover_device", recover)
+    mock(api, lambda request: calls.append(str(request.url)) or httpx.Response(204))
+    api.start({"id": "t"})
+    assert calls[0] == "recover" and "device_id=new" in calls[1]
+
+
+def test_device_activation_uses_play_false_after_restart(api, monkeypatch):
+    bodies = []
+    backend = SimpleNamespace(device_id="new", restart=lambda: None)
+    api.backend = backend
+    api.device_id = "old"
+    monkeypatch.setattr(api, "devices", lambda: [{"id": "new", "name": "tspotify"}])
+    mock(api, lambda request: bodies.append(json.loads(request.content)) or httpx.Response(204))
+    api.recover_device(force=True)
+    assert bodies == [{"device_ids": ["new"], "play": False}]
+
+
+def test_spotify_activation_restriction_is_retried_after_silent_transfer(api, monkeypatch):
+    calls = []
+    api.backend = SimpleNamespace(
+        device_id="device", _events=lambda: None, wait_playing=lambda *a, **kw: None
+    )
+
+    def handler(request):
+        calls.append(request)
+        if len(calls) == 1:
+            return httpx.Response(
+                403, json={"error": {"message": "Player command failed: Restriction violated"}}
+            )
+        return httpx.Response(204)
+
+    mock(api, handler)
+    monkeypatch.setattr("tspotify.api.time.sleep", lambda _: None)
+    api.start({"id": "track"})
+    assert len(calls) == 3
+    assert json.loads(calls[1].content) == {"device_ids": ["device"], "play": False}
+    assert "/play?device_id=device" in str(calls[2].url)

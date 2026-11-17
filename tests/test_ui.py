@@ -305,3 +305,88 @@ def test_function_volume_keys_work_in_all_input_modes(app, key, expected, mode):
     assert app.query == "keep search"
     if mode != "normal":
         assert getattr(app, mode)
+
+
+@pytest.mark.parametrize(
+    "key,section",
+    [
+        ("4", "Недавние"),
+        ("5", "Ваши миксы"),
+        ("6", "Новые релизы"),
+        ("7", "Рекомендации"),
+        ("8", "Миксы дня"),
+    ],
+)
+def test_discovery_sections_are_available_from_number_keys(app, key, section):
+    app.key(key)
+    settle(app)
+    assert app.section == section
+
+
+@pytest.mark.parametrize("size", [(24, 80), (48, 140), (70, 180)])
+def test_fullscreen_artwork_metadata_spectrum_and_return(app, size):
+    app.s.size = size
+    selected = app.selected
+    app.key(curses.KEY_F3)
+    assert app.fullscreen
+    app.art = [[(150, 180, 200)] * 32 for _ in range(32)]
+    app.render()
+    assert any("NOW PLAYING" in text for _, _, text in app.s.calls)
+    assert any("Track" in text for _, _, text in app.s.calls)
+    assert app.spectrum_area[2] > 0
+    app.animate()
+    app.key("\x1b")
+    assert not app.fullscreen and app.selected == selected
+
+
+def mouse_at(app, monkeypatch, x, y, state):
+    monkeypatch.setattr(curses, "getmouse", lambda: (0, x, y, 0, state))
+    app.key(curses.KEY_MOUSE)
+
+
+def test_mouse_can_select_and_double_click_open_playlist(app, monkeypatch):
+    app.render()
+    y, x, _, _, _, _ = next(hit for hit in app.hits if hit[4] == "row")
+    mouse_at(app, monkeypatch, x, y, curses.BUTTON1_CLICKED)
+    assert app.selected == 0
+    assert not any(call[0] == "context" for call in app.test_calls)
+    mouse_at(app, monkeypatch, x, y, curses.BUTTON1_DOUBLE_CLICKED)
+    settle(app)
+    assert app.test_calls[-1][0] == "context"
+
+
+def test_mouse_can_open_discovery_tab_and_expand_player(app, monkeypatch):
+    app.render()
+    y, x, *_ = next(hit for hit in app.hits if hit[4:] == ("key", "4"))
+    mouse_at(app, monkeypatch, x, y, curses.BUTTON1_CLICKED)
+    settle(app)
+    assert app.section == "Недавние"
+    app.render()
+    y, x, *_ = next(hit for hit in app.hits if hit[4:] == ("key", curses.KEY_F3))
+    mouse_at(app, monkeypatch, x, y, curses.BUTTON1_CLICKED)
+    assert app.fullscreen
+
+
+def test_mouse_hover_focuses_panel_without_starting_audio(app, monkeypatch):
+    app.render()
+    y, x, *_ = next(hit for hit in app.hits if hit[4:] == ("panel", "search"))
+    mouse_at(app, monkeypatch, x + 1, y + 1, curses.REPORT_MOUSE_POSITION)
+    assert app.focus_panel == "search"
+    assert not app.test_calls
+
+
+def test_mouse_volume_bar_can_set_zero_without_playing(app, monkeypatch):
+    app.render()
+    y, x, *_ = next(hit for hit in app.hits if hit[4] == "volume")
+    mouse_at(app, monkeypatch, x, y, curses.BUTTON1_CLICKED)
+    settle(app)
+    assert app.test_calls[-1] == ("control", ("volume", "0"))
+
+
+def test_help_can_scroll_in_compact_terminal(app):
+    app.s.size = (24, 80)
+    app.help = True
+    app.render()
+    app.key(curses.KEY_DOWN)
+    app.render()
+    assert app.help_offset == 1

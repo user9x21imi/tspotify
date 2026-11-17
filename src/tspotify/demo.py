@@ -62,7 +62,13 @@ class Demo:
         }
 
     def library(self, section):
-        kind = "album" if section == "Альбомы" else "track" if section == "Любимые" else "playlist"
+        kind = (
+            "album"
+            if section in ("Альбомы", "Новые релизы")
+            else "track"
+            if section in ("Любимые", "Недавние", "Рекомендации")
+            else "playlist"
+        )
         items = (
             self.tracks
             if kind == "track"

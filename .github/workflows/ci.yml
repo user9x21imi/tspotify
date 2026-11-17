@@ -74,12 +74,12 @@ jobs:
       - name: Exercise native terminal rendering and q (Unix, offline)
         if: runner.os != 'Windows'
         run: |
-          python scripts/smoke_terminal.py dist/tspotify/tspotify
+          python scripts/smoke_terminal.py dist/tspotify/tspotify --interact
           python scripts/smoke_terminal.py dist/tspotify/tspotify --compact
       - name: Exercise native terminal rendering and q (Windows, offline)
         if: runner.os == 'Windows'
         run: |
-          python scripts/smoke_terminal.py dist/tspotify/tspotify.exe
+          python scripts/smoke_terminal.py dist/tspotify/tspotify.exe --interact
           python scripts/smoke_terminal.py dist/tspotify/tspotify.exe --compact
       - name: Package public release files
         run: python scripts/package_release.py ${{ matrix.platform }}

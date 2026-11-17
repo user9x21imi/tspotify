@@ -41,6 +41,7 @@ class Spotify:
         self.backend = None
         self.device_id = None
         self.external = False
+        self.backend_factory = None
         self.last_playback = {}
         self._last_remote_poll = 0.0
         self._lock = threading.Lock()
@@ -125,7 +126,7 @@ class Spotify:
             match = None
         else:
             external = [x for x in choices if x.get("name") not in ("tspotify", "spotify-player")]
-            match = next((x for x in external if x.get("is_active")), None) or next(iter(external), None)
+            match = next((x for x in external if x.get("is_active")), None)
         if match:
             self.device_id = match["id"]
             self.external = True
@@ -165,12 +166,25 @@ class Spotify:
             )
         return "device_id=" + quote(self.device_id, safe="")
 
-    def recover_device(self):
+    def recover_device(self, force=False):
         self.on_status("Spotify потерял устройство. Проверяю регистрацию…")
         devices = self.devices()
         current = next((d for d in devices if d["id"] == self.device_id), None)
-        if current:
-            return
+        if current and not force:
+            try:
+                self.request("PUT", "me/player", {"device_ids": [current["id"]], "play": False})
+                return
+            except SpotifyError as error:
+                if error.status != 404:
+                    raise
+        if self.external:
+            if not self.backend_factory:
+                raise SpotifyError(
+                    "Выбранное устройство отключилось. Откройте Spotify на нём или выберите встроенный плеер."
+                )
+            self.on_status("Внешний Spotify отключился. Подключаю встроенный плеер без звука…")
+            self.backend = self.backend_factory()
+            self.external = False
         for attempt in range(2):
             self.on_status(f"Переподключаю встроенный Spotify ({attempt + 1}/2)…")
             self.backend.restart()
@@ -181,14 +195,27 @@ class Spotify:
                 current = next((d for d in devices if d["id"] == self.backend.device_id), None)
                 if current:
                     self.device_id = current["id"]
-                    self.on_status("Устройство зарегистрировано. Запускаю трек…")
+                    try:
+                        self.request("PUT", "me/player", {"device_ids": [current["id"]], "play": False})
+                    except SpotifyError as error:
+                        if error.status != 404:
+                            raise
+                        time.sleep(1)
+                        continue
+                    self.on_status("Устройство зарегистрировано и активировано. Выполняю команду…")
                     return
                 time.sleep(1)
         raise SpotifyError(
             "Spotify не зарегистрировал устройство после переподключения. Проверьте сеть и повторите."
         )
 
+    def ensure_engine(self):
+        if self.backend and not self.external and hasattr(self.backend, "alive") and not self.backend.alive():
+            self.on_status("Движок остановился. Восстанавливаю соединение без звука…")
+            self.recover_device(force=True)
+
     def start(self, item, context_uri=None):
+        self.ensure_engine()
         item = dict(item)
         if not item.get("duration_ms") and isinstance(item.get("duration"), dict):
             item["duration_ms"] = (
@@ -210,7 +237,6 @@ class Spotify:
         if self.backend and not self.external:
             self.backend._events()
         started = time.monotonic()
-        recovered = False
         for attempt in range(3):
             try:
                 if self.backend and not self.external:
@@ -219,11 +245,27 @@ class Spotify:
                 self.request("PUT", "me/player/play?" + self.device_query(), body)
                 break
             except SpotifyError as error:
-                if error.status != 404 or not self.backend or self.external or attempt == 2:
+                restricted = error.status == 403 and "Restriction violated" in str(error)
+                if restricted and attempt < 2 and self.backend and not self.external:
+                    self.on_status("Spotify ещё не активировал устройство. Подключаю без звука…")
+                    self.request("PUT", "me/player", {"device_ids": [self.backend.device_id], "play": False})
+                    time.sleep(1)
+                    continue
+                if error.status != 404:
                     raise
-                if not recovered:
-                    self.recover_device()
-                    recovered = True
+                if attempt == 2:
+                    raise SpotifyError(
+                        "Устройство Spotify отключилось. Переподключение не подтвердилось; трек не запущен.",
+                        status=404,
+                    ) from None
+                if self.external and not self.backend_factory:
+                    raise SpotifyError(
+                        "Выбранное устройство Spotify отключилось. Откройте Spotify на нём и повторите запуск.",
+                        status=404,
+                    ) from None
+                if not self.backend and not self.backend_factory:
+                    raise
+                self.recover_device(force=attempt > 0)
                 time.sleep(1.5)  # Connect discovery may lag the local control socket.
         if self.backend and not self.external:
             self.backend.wait_playing(track_id, since=started, timeout=25)
@@ -247,7 +289,21 @@ class Spotify:
             time.sleep(0.5)
         raise SpotifyError("Spotify принял запрос, но запуск выбранного трека не подтверждён.")
 
-    def control(self, command, value=None):
+    def control(self, command, value=None, _retry=False):
+        try:
+            return self._control(command, value)
+        except SpotifyError as error:
+            if error.status != 404 or _retry:
+                raise
+            if not self.backend and not self.backend_factory:
+                raise SpotifyError(
+                    "Выбранное устройство Spotify отключилось. Откройте его и повторите команду.", status=404
+                ) from None
+            self.recover_device(force=True)
+            return self.control(command, value, _retry=True)
+
+    def _control(self, command, value=None):
+        self.ensure_engine()
         device = self.device_query()
         if command == "play-pause":
             command = "pause" if self.playback().get("is_playing") else "play"
@@ -289,6 +345,8 @@ class Spotify:
         return not unlike
 
     def library(self, section):
+        if section not in ("Плейлисты", "Альбомы", "Любимые"):
+            return self.discover(section)
         mapping = {
             "Плейлисты": ("playlist", "me/playlists?limit=50"),
             "Альбомы": ("album", "me/albums?limit=50"),
@@ -319,6 +377,87 @@ class Spotify:
                 if isinstance(item, dict) and item.get("id"):
                     result.append((kind, item))
             page = self.request("GET", page["next"]) if page.get("next") else None
+        paths.private_json(target, result)
+        return section, result
+
+    def discover(self, section):
+        """Read real Spotify data lazily; never substitute invented recommendations."""
+        names = {
+            "Недавние": "recent",
+            "Ваши миксы": "mixes",
+            "Новые релизы": "releases",
+            "Рекомендации": "recommendations",
+            "Миксы дня": "daily",
+        }
+        if section not in names:
+            raise SpotifyError("Неизвестный раздел библиотеки")
+        target = paths.CACHE / ("discover-" + names[section] + ".json")
+        ttl = 60 if section == "Недавние" else 600
+        try:
+            if time.time() - target.stat().st_mtime < ttl:
+                result = json.loads(target.read_text(encoding="utf-8"))
+                if isinstance(result, list):
+                    return section, result
+        except (OSError, ValueError):
+            pass
+        result = []
+        try:
+            if section == "Недавние":
+                data = self.request("GET", "me/player/recently-played?limit=50") or {}
+                playlists = dict((item["id"], item) for _, item in self.library("Плейлисты")[1])
+                seen = set()
+                for entry in data.get("items", []):
+                    track = track_from_entry(entry)
+                    context = entry.get("context") or {}
+                    uri = context.get("uri", "").split(":")
+                    if len(uri) == 3 and uri[1] in ("playlist", "album"):
+                        kind, identity = uri[1:]
+                        item = playlists.get(identity) if kind == "playlist" else (track or {}).get("album")
+                        if item and item.get("id") == identity and (kind, identity) not in seen:
+                            seen.add((kind, identity))
+                            result.append((kind, item))
+                    if track and ("track", track["id"]) not in seen:
+                        seen.add(("track", track["id"]))
+                        result.append(("track", track))
+            elif section in ("Ваши миксы", "Миксы дня"):
+                for kind, item in self.library("Плейлисты")[1]:
+                    name = item.get("name", "").casefold()
+                    owner = item.get("owner") or {}
+                    spotify = isinstance(owner, dict) and owner.get("id") == "spotify"
+                    daily = any(word in name for word in ("daily mix", "daylist", "микс дня", "микс на день"))
+                    mixed = daily or any(
+                        word in name
+                        for word in (
+                            "mix",
+                            "микс",
+                            "discover weekly",
+                            "release radar",
+                            "радар новинок",
+                            "открытия недели",
+                        )
+                    )
+                    if (daily if section == "Миксы дня" else mixed) and spotify:
+                        result.append((kind, item))
+            elif section == "Новые релизы":
+                data = self.request("GET", "browse/new-releases?limit=50") or {}
+                result = [
+                    ("album", item)
+                    for item in (data.get("albums") or {}).get("items", [])
+                    if item and item.get("id")
+                ]
+            elif section == "Рекомендации":
+                top = self.request("GET", "me/top/tracks?limit=5&time_range=short_term") or {}
+                seeds = ",".join(item["id"] for item in top.get("items", []) if item and item.get("id"))
+                if seeds:
+                    data = self.request("GET", "recommendations?limit=50&seed_tracks=" + seeds) or {}
+                    result = [("track", item) for item in data.get("tracks", []) if item and item.get("id")]
+        except SpotifyError as error:
+            if error.status in (403, 404):
+                raise SpotifyError(
+                    f"Раздел «{section}» недоступен для этого входа Spotify. Остальная библиотека работает.",
+                    status=error.status,
+                ) from None
+            raise
         paths.private_json(target, result)
         return section, result
 

@@ -12,6 +12,21 @@ command = [str(binary), "--demo", "--no-splash"]
 height, width = (24, 80) if "--compact" in sys.argv else (48, 140)
 output = []
 seen = threading.Event()
+
+
+def interact(send):
+    if "--interact" not in sys.argv:
+        return
+    # Click the visible expand button through the terminal mouse protocol.
+    send(f"\x1b[<0;{width - 42};1M\x1b[<0;{width - 42};1m")
+    deadline = time.monotonic() + 8
+    while "NOW PLAYING" not in "".join(output) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    if "NOW PLAYING" not in "".join(output):
+        raise RuntimeError("Mouse did not open the expanded player: " + "".join(output)[-2000:])
+    send("\x1bOR")  # F3 returns to the library.
+
+
 if os.name == "nt":
     from winpty import PtyProcess
 
@@ -31,6 +46,7 @@ if os.name == "nt":
     if not seen.wait(20):
         process.close(force=True)
         raise SystemExit("Native terminal failed to render: " + "".join(output)[-2000:])
+    interact(process.write)
     process.write("q")
     deadline = time.monotonic() + 10
     while process.isalive() and time.monotonic() < deadline:
@@ -69,6 +85,7 @@ else:
         process.kill()
         process.wait()
         raise SystemExit("Native terminal failed to render: " + "".join(output)[-2000:])
+    interact(lambda value: os.write(master, value.encode()))
     os.write(master, b"q")
     try:
         code = process.wait(timeout=10)
