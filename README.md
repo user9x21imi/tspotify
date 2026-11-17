@@ -167,3 +167,9 @@ Release binaries are currently unsigned. macOS Gatekeeper / Windows SmartScreen 
 ## Credits
 
 Independent project, not affiliated with Spotify. Streaming uses [spotify_player](https://github.com/aome510/spotify-player), downloaded from its official releases with pinned SHA-256 hashes. Its license and third-party notices are preserved separately. The tspotify interface is [MIT licensed](LICENSE).
+
+### Updates
+
+Installed release builds check GitHub once a day before opening the player. A new stable release displays its version and asks `Install update? [y/N]`. Nothing installs unless you confirm. Downloads are pinned to that release and checked against its SHA-256 manifest. Spotify login and preferences are preserved. Restart `tspotify` after installation. Network failures never prevent opening the player.
+
+Run `tspotify update` to check manually. Source checkouts keep their development environment unchanged unless you explicitly invoke this command.

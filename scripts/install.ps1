@@ -1,7 +1,12 @@
 $ErrorActionPreference = 'Stop'
 if (-not [Environment]::Is64BitOperatingSystem) { throw 'tspotify requires Windows x64.' }
 $asset = 'tspotify-windows-x86_64.zip'
-$baseUrl = 'https://github.com/user9x21imi/tspotify/releases/latest/download'
+$releasePath = 'latest/download'
+if ($env:TSPOTIFY_RELEASE) {
+    if ($env:TSPOTIFY_RELEASE -notmatch '^v?[0-9]+\.[0-9]+\.[0-9]+$') { throw 'Invalid release' }
+    $releasePath = 'download/' + $env:TSPOTIFY_RELEASE
+}
+$baseUrl = 'https://github.com/user9x21imi/tspotify/releases/' + $releasePath
 $taskTemp = Join-Path ([IO.Path]::GetTempPath()) ('tspotify-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force $taskTemp | Out-Null
 try {

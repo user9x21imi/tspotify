@@ -180,7 +180,45 @@ def test_first_play_waits_for_connect_device_registration(api, monkeypatch):
 
     mock(api, handler)
     monkeypatch.setattr("tspotify.api.time.sleep", lambda seconds: None)
+    monkeypatch.setattr(api, "devices", lambda: [{"id": "device", "name": "tspotify"}])
     api.device_id = "device"
     api.backend = SimpleNamespace(_events=lambda: None, wait_playing=lambda *a, **k: None)
     assert "Воспроизводится" in api.start({"id": "track"})
     assert len(calls) == 2
+
+
+def test_missing_connect_registration_restarts_engine_and_uses_new_device(api, monkeypatch):
+    urls = []
+    restarts = []
+
+    def handler(request):
+        urls.append(str(request.url))
+        if "old-device" in str(request.url):
+            return httpx.Response(404, json={"error": {"message": "Device not found"}})
+        return httpx.Response(204)
+
+    mock(api, handler)
+    monkeypatch.setattr("tspotify.api.time.sleep", lambda seconds: None)
+    backend = SimpleNamespace(device_id="old-device", _events=lambda: None, wait_playing=lambda *a, **k: None)
+
+    def restart():
+        restarts.append(True)
+        backend.device_id = "new-device"
+
+    backend.restart = restart
+    api.backend = backend
+    api.device_id = "old-device"
+    monkeypatch.setattr(
+        api, "devices", lambda: [] if not restarts else [{"id": "new-device", "name": "tspotify"}]
+    )
+    assert "Воспроизводится" in api.start({"id": "track"})
+    assert restarts == [True]
+    assert "old-device" in urls[0] and "new-device" in urls[-1]
+
+
+def test_offline_external_device_is_not_replaced_by_unrequested_local_audio(api):
+    mock(api, lambda request: httpx.Response(404, json={"error": {"message": "Device not found"}}))
+    api.external = True
+    api.device_id = "phone"
+    with pytest.raises(SpotifyError):
+        api.start({"id": "track"})

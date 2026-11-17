@@ -1,6 +1,8 @@
 #!/bin/sh
 set -eu
-repo="https://github.com/user9x21imi/tspotify/releases/latest/download"
+release="${TSPOTIFY_RELEASE:-latest}"
+case "$release" in latest) release_path=latest/download ;; v[0-9]*.[0-9]*.[0-9]*) release_path="download/$release" ;; *) echo "Invalid release" >&2; exit 1 ;; esac
+repo="https://github.com/user9x21imi/tspotify/releases/$release_path"
 case "$(uname -s)/$(uname -m)" in
   Linux/x86_64) asset=tspotify-linux-x86_64.zip ;;
   Darwin/arm64) asset=tspotify-macos-arm64.zip ;;

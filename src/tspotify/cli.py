@@ -6,6 +6,7 @@ import locale
 import os
 import platform
 import shutil
+import signal
 import sys
 import webbrowser
 from urllib.parse import urlsplit
@@ -106,6 +107,7 @@ def parser():
     login_parser.add_argument(
         "--qr", dest="login_qr", action="store_true", help="show QR; paste the callback URL from your phone"
     )
+    sub.add_parser("update", help="check and install a release update after confirmation")
     sub.add_parser("doctor", help="show diagnostics without printing tokens")
     sub.add_parser("devices", help="list available Spotify Connect devices")
     sub.add_parser("install-engine", help="download and verify the pinned streaming engine")
@@ -114,6 +116,11 @@ def parser():
 
 def run(args):
     paths.prepare()
+    if args.command == "update":
+        from .updates import offer
+
+        offer(force=True)
+        return
     if args.demo:
         from .demo import run as demo_run
 
@@ -128,6 +135,11 @@ def run(args):
     if args.command == "login":
         auth.login(qr=args.qr or args.login_qr)
         return
+    if args.command is None:
+        from .updates import offer
+
+        if offer():
+            return
     try:
         auth.access_token()
     except auth.LoginRequired:
@@ -192,6 +204,15 @@ def main(argv=None):
             if hasattr(stream, "reconfigure"):
                 stream.reconfigure(encoding="utf-8", errors="replace")
     args = parser().parse_args(argv)
+    previous = {}
+
+    def interrupted(signum, frame):
+        raise KeyboardInterrupt
+
+    for name in ("SIGTERM", "SIGHUP"):
+        if hasattr(signal, name):
+            sig = getattr(signal, name)
+            previous[sig] = signal.signal(sig, interrupted)
     try:
         run(args)
     except KeyboardInterrupt:
@@ -200,3 +221,6 @@ def main(argv=None):
         print("\ntspotify: " + str(error), file=sys.stderr)
         print("Диагностика: tspotify doctor", file=sys.stderr)
         raise SystemExit(1) from None
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)

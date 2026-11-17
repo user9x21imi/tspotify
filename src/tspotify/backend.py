@@ -10,6 +10,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import sys
 import tarfile
 import threading
 import time
@@ -122,6 +123,7 @@ class Backend:
         self.on_authorize = on_authorize
         self.process = None
         self.pty = None
+        self.job = None
         self.master = None
         self.stopped = threading.Event()
         self.changed = threading.Condition()
@@ -136,6 +138,7 @@ class Backend:
         self.authorizing = threading.Event()
         self.authorization_error = None
         self._authorization_started = 0.0
+        self.reader_thread = None
 
     def request(self, request, timeout=2):
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
@@ -203,6 +206,9 @@ audio_cache = true
 
             # ConPTY wraps console output; keep first-run OAuth URLs on one line.
             self.pty = PtyProcess.spawn(sp.list2cmdline(args), dimensions=(30, 2000), env=env)
+            from ._winjob import Job
+
+            self.job = Job(self.pty.pid)
         else:
             import fcntl
             import pty
@@ -211,12 +217,23 @@ audio_cache = true
 
             master, slave = pty.openpty()
             fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
+            worker = (
+                [sys.executable, "_engine_worker"]
+                if getattr(sys, "frozen", False)
+                else [sys.executable, "-m", "tspotify._worker"]
+            )
             self.process = subprocess.Popen(
-                args, stdin=slave, stdout=slave, stderr=slave, start_new_session=True, env=env
+                worker + [str(os.getpid())] + args,
+                stdin=slave,
+                stdout=slave,
+                stderr=slave,
+                start_new_session=True,
+                env=env,
             )
             os.close(slave)
             self.master = master
-        threading.Thread(target=self._read, daemon=True, name="spotify-engine-output").start()
+        self.reader_thread = threading.Thread(target=self._read, daemon=True, name="spotify-engine-output")
+        self.reader_thread.start()
         deadline = time.monotonic() + 75
         while not self.ready() or self.authorizing.is_set():
             if self.authorization_error:
@@ -407,7 +424,12 @@ audio_cache = true
     def close(self):
         self.stopped.set()
         if self.pty:
-            self.pty.close(force=True)
+            try:
+                self.pty.close(force=True)
+            finally:
+                if self.job:
+                    self.job.close()
+                    self.job = None
         if self.process and self.process.poll() is None:
             try:
                 os.killpg(self.process.pid, signal.SIGTERM)
@@ -421,3 +443,5 @@ audio_cache = true
             except OSError:
                 pass
             self.master = None
+        if self.reader_thread and self.reader_thread is not threading.current_thread():
+            self.reader_thread.join(timeout=2)

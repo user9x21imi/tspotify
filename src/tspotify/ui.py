@@ -69,6 +69,7 @@ class App:
         self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=4)
         self.art_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2)
         self.events = queue.Queue()
+        API.on_status = lambda message: self.events.put(("notice", message, None))
         self.pending = set()
         self.thumbnails = OrderedDict()
         self.library_data = {}
@@ -211,6 +212,9 @@ class App:
                 break
             changed = True
             self.pending.discard(key)
+            if key == "notice":
+                self.notice = value
+                continue
             if key.startswith("thumb:"):
                 self.thumbnails[key[6:]] = value or []
                 while len(self.thumbnails) > 128:

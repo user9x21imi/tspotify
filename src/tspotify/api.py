@@ -44,6 +44,7 @@ class Spotify:
         self.last_playback = {}
         self._last_remote_poll = 0.0
         self._lock = threading.Lock()
+        self.on_status = lambda message: None
 
     def close(self):
         self.http.close()
@@ -147,6 +148,31 @@ class Spotify:
             )
         return "device_id=" + quote(self.device_id, safe="")
 
+    def recover_device(self):
+        self.on_status("Spotify потерял устройство. Проверяю регистрацию…")
+        devices = self.devices()
+        current = next((d for d in devices if d["id"] == self.device_id), None)
+        if current:
+            return
+        self.on_status("Переподключаю встроенный Spotify…")
+        self.backend.restart()
+        self.device_id = self.backend.device_id
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            devices = self.devices()
+            current = next((d for d in devices if d["id"] == self.backend.device_id), None)
+            if not current:
+                current = next((d for d in devices if d.get("name") == "tspotify"), None)
+            if current:
+                self.device_id = current["id"]
+                self.backend.device_id = current["id"]
+                self.on_status("Устройство зарегистрировано. Запускаю трек…")
+                return
+            time.sleep(1)
+        raise SpotifyError(
+            "Spotify не зарегистрировал устройство после переподключения. Проверьте сеть и повторите."
+        )
+
     def start(self, item, context_uri=None):
         item = dict(item)
         if not item.get("duration_ms") and isinstance(item.get("duration"), dict):
@@ -169,13 +195,20 @@ class Spotify:
         if self.backend and not self.external:
             self.backend._events()
         started = time.monotonic()
+        recovered = False
         for attempt in range(3):
             try:
+                if self.backend and not self.external:
+                    self.backend._events()
+                started = time.monotonic()
                 self.request("PUT", "me/player/play?" + self.device_query(), body)
                 break
             except SpotifyError as error:
                 if error.status != 404 or not self.backend or self.external or attempt == 2:
                     raise
+                if not recovered:
+                    self.recover_device()
+                    recovered = True
                 time.sleep(1.5)  # Connect discovery may lag the local control socket.
         if self.backend and not self.external:
             self.backend.wait_playing(track_id, since=started, timeout=25)
