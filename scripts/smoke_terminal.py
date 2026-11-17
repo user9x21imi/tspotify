@@ -1,6 +1,7 @@
 """Exercise a real native curses frontend in an offline pseudo-terminal."""
 
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -17,8 +18,16 @@ seen = threading.Event()
 def interact(send):
     if "--interact" not in sys.argv:
         return
-    # Click the visible expand button through the terminal mouse protocol.
-    send(f"\x1b[<0;{width - 42};1M\x1b[<0;{width - 42};1m")
+    # Emulate the protocol requested by the child's curses library. macOS
+    # system ncurses can request legacy X10 rather than SGR mouse reports.
+    # Cover coordinates stay below 95, so X10 bytes are also plain ASCII.
+    terminal_output = "".join(output)
+    sgr = os.name == "nt" or re.search(r"\x1b\[\?[0-9;]*1006[0-9;]*h", terminal_output)
+    if sgr:
+        send("\x1b[<0;6;10M\x1b[<0;6;10m")
+    else:
+        send("\x1b[M" + chr(32) + chr(38) + chr(42))
+        send("\x1b[M" + chr(35) + chr(38) + chr(42))
     deadline = time.monotonic() + 8
     while "NOW PLAYING" not in "".join(output) and time.monotonic() < deadline:
         time.sleep(0.05)
