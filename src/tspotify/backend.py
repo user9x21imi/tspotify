@@ -157,11 +157,19 @@ class Backend:
                 data.extend(chunk)
                 if len(data) > 16 * 1024 * 1024:
                     raise RuntimeError("Слишком большой ответ локального движка")
-            result = json.loads(data)
+            try:
+                result = json.loads(data)
+            except ValueError:
+                raise RuntimeError(
+                    "Встроенный плеер вернул повреждённый ответ. Перезапустите клиент."
+                ) from None
             if "Err" in result:
                 raise RuntimeError(bytes(result["Err"]).decode(errors="replace"))
             payload = bytes(result["Ok"])
-            return json.loads(payload) if payload else None
+            try:
+                return json.loads(payload) if payload.strip() else None
+            except ValueError:
+                raise RuntimeError("Встроенный плеер вернул повреждённые данные воспроизведения.") from None
 
     def ready(self):
         try:

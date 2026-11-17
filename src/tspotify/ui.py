@@ -472,7 +472,13 @@ class App:
             if heights[name]:
                 getattr(self, "render_" + name)(y, w, heights[name])
                 y += heights[name] + 1
-        self.box(h - 4, 1, 3, w - 2, "Громкость · − / + · m")
+        self.box(
+            h - 4,
+            1,
+            3,
+            w - 2,
+            "БЕЗ ЗВУКА · + громче · m" if not self.volume else "Громкость · − / + · m",
+        )
         filled = round(self.volume * 16 / 100)
         self.put(h - 3, 3, "━" * filled + "─" * (16 - filled), 2)
         self.put(h - 3, 21, f"{self.volume:3d}%", 1, True)

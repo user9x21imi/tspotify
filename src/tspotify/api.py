@@ -88,7 +88,24 @@ class Spotify:
             raise SpotifyError(
                 f"Spotify {response.status_code}: {message or 'запрос отклонён'}", status=response.status_code
             )
-        return response.json() if response.content else None
+        if response.status_code == 204:
+            return None
+        # Player commands acknowledge success with an empty or plain-text body.
+        # Their result is confirmed separately from playback state/events.
+        if method != "GET":
+            return None
+        try:
+            if not response.content.strip():
+                raise ValueError("empty response")
+            return response.json()
+        except ValueError:
+            if _retry == 0:
+                time.sleep(0.2)
+                return self.request(method, path, body, _retry=1)
+            endpoint = url.split("?", 1)[0].removeprefix("https://api.spotify.com/v1/")
+            raise SpotifyError(
+                f"Spotify вернул некорректный ответ ({endpoint}). Повторите действие; команда не подтверждена."
+            ) from None
 
     def devices(self):
         return (self.request("GET", "me/player/devices") or {}).get("devices", [])
@@ -279,8 +296,13 @@ class Spotify:
         }
         kind, endpoint = mapping[section]
         target = paths.CACHE / f"library-{kind}.json"
-        if target.exists() and time.time() - target.stat().st_mtime < 600:
-            return section, json.loads(target.read_text(encoding="utf-8"))
+        try:
+            if target.exists() and time.time() - target.stat().st_mtime < 600:
+                cached = json.loads(target.read_text(encoding="utf-8"))
+                if isinstance(cached, list):
+                    return section, cached
+        except (OSError, ValueError):
+            pass
         result = []
         page = self.request("GET", endpoint)
         while page:
@@ -309,10 +331,14 @@ class Spotify:
 
     def context(self, kind, item_id, name):
         target = paths.CACHE / f"{kind}-{item_id}.json"
-        if target.exists() and time.time() - target.stat().st_mtime < 3600:
-            value = json.loads(target.read_text(encoding="utf-8"))
-            value["context_uri"] = f"spotify:{kind}:{item_id}"
-            return value
+        try:
+            if target.exists() and time.time() - target.stat().st_mtime < 3600:
+                value = json.loads(target.read_text(encoding="utf-8"))
+                if isinstance(value, dict) and isinstance(value.get("tracks"), list):
+                    value["context_uri"] = f"spotify:{kind}:{item_id}"
+                    return value
+        except (OSError, ValueError):
+            pass
         if kind == "playlist":
             page = self.request("GET", f"playlists/{item_id}/tracks?limit=100")
         elif kind == "album":

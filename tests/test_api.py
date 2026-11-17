@@ -222,3 +222,59 @@ def test_offline_external_device_is_not_replaced_by_unrequested_local_audio(api)
     api.device_id = "phone"
     with pytest.raises(SpotifyError):
         api.start({"id": "track"})
+
+
+@pytest.mark.parametrize("body", [b"", b" \n", b"OK"])
+def test_successful_commands_do_not_require_json_acknowledgement(api, body):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(200, content=body)
+
+    mock(api, handler)
+    assert api.request("PUT", "me/player/pause") is None
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("body", [b"", b" \n", b"<html>gateway error</html>"])
+def test_malformed_read_retries_once_then_reports_endpoint_without_raw_json_error(api, monkeypatch, body):
+    monkeypatch.setattr("tspotify.api.time.sleep", lambda _: None)
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(200, content=body)
+
+    mock(api, handler)
+    with pytest.raises(SpotifyError, match="некорректный ответ \\(me/player\\)"):
+        api.request("GET", "me/player")
+    assert len(calls) == 2
+
+
+def test_transient_malformed_read_recovers_without_user_error(api, monkeypatch):
+    monkeypatch.setattr("tspotify.api.time.sleep", lambda _: None)
+    replies = iter([httpx.Response(200, content=b" "), httpx.Response(200, json={"devices": []})])
+    mock(api, lambda request: next(replies))
+    assert api.devices() == []
+
+
+def test_no_active_player_204_is_normal(api):
+    mock(api, lambda request: httpx.Response(204))
+    assert api.request("GET", "me/player") is None
+
+
+def test_corrupt_playlist_cache_is_refetched(api):
+    from tspotify import paths
+
+    (paths.CACHE / "playlist-p.json").write_text("", encoding="utf-8")
+    mock(api, lambda request: httpx.Response(200, json={"items": [{"track": {"id": "a"}}]}))
+    assert api.context("playlist", "p", "Playlist")["tracks"] == [{"id": "a"}]
+
+
+def test_corrupt_library_cache_is_refetched(api):
+    from tspotify import paths
+
+    (paths.CACHE / "library-playlist.json").write_text(" ", encoding="utf-8")
+    mock(api, lambda request: httpx.Response(200, json={"items": [{"id": "p"}]}))
+    assert api.library("Плейлисты") == ("Плейлисты", [("playlist", {"id": "p"})])
