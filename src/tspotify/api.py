@@ -1,6 +1,7 @@
 """Pooled Spotify requests, explicit failures, cached libraries and verified playback."""
 
 import json
+import math
 import threading
 import time
 from urllib.parse import quote
@@ -58,6 +59,7 @@ class Spotify:
         self._last_remote_poll = 0.0
         self._lock = threading.Lock()
         self.on_status = lambda message: None
+        self.on_volume_retry = lambda target, seconds, applied: None
 
     def close(self):
         self.http.close()
@@ -88,7 +90,7 @@ class Spotify:
     def request(self, method, path, body=None, _retry=0):
         remaining = self.rate_until - time.monotonic()
         if remaining > 0:
-            raise RateLimited(max(1, int(remaining)))
+            raise RateLimited(max(1, math.ceil(remaining)))
         if path.startswith("https://api.spotify.com/v1/"):
             url = path
         elif not path.startswith(("http:", "https:")):
@@ -106,8 +108,11 @@ class Spotify:
         except httpx.HTTPError:
             raise SpotifyError("Соединение со Spotify прервано; команда не подтверждена.") from None
         if response.status_code == 429:
-            seconds = min(86400, max(1, int(response.headers.get("Retry-After", "30"))))
-            self.rate_until = time.monotonic() + seconds
+            try:
+                seconds = min(86400, max(1, math.ceil(float(response.headers.get("Retry-After", "30")))))
+            except ValueError:
+                seconds = 30
+            self.rate_until = max(self.rate_until, time.monotonic() + seconds)
             if method == "GET" and _retry == 0 and seconds <= 3:
                 time.sleep(seconds + 0.05)
                 return self.request(method, path, body, _retry=1)
@@ -349,8 +354,14 @@ class Spotify:
                     self._volume_revision == volume_revision
                     and volume > 0
                     and not getattr(self.backend, "muted", True)
+                    and getattr(self.backend, "confirmed_volume", None) != volume
                 ):
-                    self.control("volume", volume)
+                    try:
+                        self.control("volume", volume)
+                    except RateLimited as error:
+                        self.on_volume_retry(
+                            volume, error.seconds, getattr(self.backend, "confirmed_volume", 0)
+                        )
                 self.last_playback["device"]["volume_percent"] = self.current_volume
             self.save_session(self.last_playback, volume=self.current_volume)
             return "Воспроизводится: " + item.get("name", "трек")
@@ -400,6 +411,7 @@ class Spotify:
             self.request("PUT", f"me/player/volume?volume_percent={value}&{device}")
             if self.backend:
                 self.backend.preferred_volume = value
+                self.backend.confirmed_volume = value
                 self.backend._volume_set_at = time.monotonic()
                 self.backend._snapshot_time = 0
                 if value > 0:

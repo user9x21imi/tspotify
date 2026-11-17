@@ -31,6 +31,8 @@ def app(monkeypatch):
     monkeypatch.setattr(curses, "color_pair", lambda x: x)
     monkeypatch.setattr(curses, "COLORS", 256, raising=False)
     monkeypatch.setattr(curses, "COLOR_PAIRS", 65536, raising=False)
+    monkeypatch.setattr(ui, "VOLUME_DEBOUNCE", 0.0)
+    monkeypatch.setattr(ui, "VOLUME_INTERVAL", 0.0)
     monkeypatch.setattr(ui, "ART", paths.CACHE)
     monkeypatch.setattr(ui, "CONFIG", paths.CONFIG / "layout.json")
     monkeypatch.setattr(ui, "ASCII_ONLY", False)
@@ -88,7 +90,7 @@ def app(monkeypatch):
 def settle(app):
     for _ in range(100):
         app.drain()
-        if not app.pending:
+        if not app.pending and not app.volume_dirty:
             return
         time.sleep(0.002)
     pytest.fail("background UI work did not settle")
@@ -138,12 +140,13 @@ def test_volume_limits_mute_and_restore(app):
     app.volume = 0
     app.key("-")
     settle(app)
-    assert app.test_calls[-1] == ("control", ("volume", "0"))
+    assert not app.test_calls
     app.volume = 100
     app.key("+")
     settle(app)
-    assert app.test_calls[-1] == ("control", ("volume", "100"))
+    assert not app.test_calls
     app.volume = 40
+    app.volume_applied = 40
     app.key("m")
     settle(app)
     app.key("m")
@@ -287,10 +290,7 @@ def test_library_refresh_clamps_selection_when_remote_list_shrinks(app):
 @pytest.mark.parametrize(
     "key,expected",
     [
-        (curses.KEY_F7, 35),
-        (curses.KEY_F8, 45),
-        (curses.KEY_F9, 35),
-        (curses.KEY_F10, 45),
+        (curses.KEY_F10, 0),
         (curses.KEY_F11, 35),
         (curses.KEY_F12, 45),
     ],
@@ -298,6 +298,7 @@ def test_library_refresh_clamps_selection_when_remote_list_shrinks(app):
 @pytest.mark.parametrize("mode", ["normal", "editing", "help", "layout_editor"])
 def test_function_volume_keys_work_in_all_input_modes(app, key, expected, mode):
     app.volume = 40
+    app.volume_applied = 40
     if mode != "normal":
         setattr(app, mode, True)
     app.query = "keep search"
@@ -380,6 +381,7 @@ def test_mouse_hover_focuses_panel_without_starting_audio(app, monkeypatch):
 
 
 def test_mouse_volume_bar_can_set_zero_without_playing(app, monkeypatch):
+    app.volume = app.volume_applied = 40
     app.render()
     y, x, *_ = next(hit for hit in app.hits if hit[4] == "volume")
     mouse_at(app, monkeypatch, x, y, curses.BUTTON1_CLICKED)
@@ -584,6 +586,7 @@ def test_rapid_volume_keys_accumulate_and_stale_poll_cannot_reverse_direction(ap
     app.volume = 40
     try:
         app.key("+")
+        app.drain()
         assert started.wait(1)
         app.events.put(("poll", {"device": {"volume_percent": 20}}, None))
         app.drain()
@@ -639,3 +642,96 @@ def test_cover_raster_is_cached_across_metadata_and_volume_redraws(app):
     entry = app.dot_cache[(id(image), 20, 10, False)]
     app.dot_image(image, 3, 3, 20, 10)
     assert app.dot_cache[(id(image), 20, 10, False)] is entry
+
+
+@pytest.mark.parametrize(
+    "key,command", [(curses.KEY_F7, "previous"), (curses.KEY_F8, "play-pause"), (curses.KEY_F9, "next")]
+)
+@pytest.mark.parametrize("mode", ["normal", "editing", "help", "layout_editor", "fullscreen"])
+def test_media_function_keys_never_change_volume_and_work_in_every_mode(app, key, command, mode):
+    app.volume = app.volume_applied = 40
+    if mode != "normal":
+        setattr(app, mode, True)
+    app.key(key)
+    settle(app)
+    assert app.volume == 40
+    assert app.test_calls[-1] == ("control", (command, None))
+
+
+def test_volume_debounce_sends_one_final_value_for_a_burst(app, monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr(ui, "volume_now", lambda: now[0])
+    monkeypatch.setattr(ui, "VOLUME_DEBOUNCE", 0.18)
+    monkeypatch.setattr(ui, "VOLUME_INTERVAL", 1.0)
+    app.volume = app.volume_applied = 40
+    for _ in range(8):
+        app.key(curses.KEY_F12)
+        app.drain()
+        now[0] += 0.01
+    assert not app.test_calls and app.volume == 80
+    now[0] += 0.2
+    settle(app)
+    assert app.test_calls == [("control", ("volume", "80"))]
+    for _ in range(100):
+        app.key(curses.KEY_F12)
+    now[0] += 1.1
+    settle(app)
+    assert app.test_calls[-1] == ("control", ("volume", "100"))
+    calls = len(app.test_calls)
+    for _ in range(100):
+        app.key(curses.KEY_F12)
+        app.drain()
+    assert len(app.test_calls) == calls
+
+
+def test_volume_429_keeps_latest_target_and_retries_only_after_retry_after(app, monkeypatch):
+    from tspotify.api import RateLimited
+
+    now = [100.0]
+    monkeypatch.setattr(ui, "volume_now", lambda: now[0])
+    monkeypatch.setattr(ui, "VOLUME_DEBOUNCE", 0.18)
+    monkeypatch.setattr(ui, "VOLUME_INTERVAL", 1.0)
+    calls = []
+
+    def limited(command, value):
+        calls.append(int(value))
+        if len(calls) == 1:
+            raise RateLimited(12)
+        return "Громкость подтверждена"
+
+    monkeypatch.setattr(ui.API, "control", limited)
+    app.volume = app.volume_applied = 40
+    app.key(curses.KEY_F12)
+    now[0] += 0.2
+    app.drain()
+    deadline = time.monotonic() + 1
+    while not app.volume_retry_until and time.monotonic() < deadline:
+        app.drain()
+        time.sleep(0.002)
+    assert app.volume_retry_until > 112
+    assert "в очереди" in app.notice and "Не удалось" not in app.notice
+    for _ in range(6):
+        app.key(curses.KEY_F12)
+        app.drain()
+    assert app.volume == 75 and calls == [45]
+    now[0] = 111.9
+    app.drain()
+    assert calls == [45]
+    app.events.put(("poll", {"device": {"volume_percent": 20}}, None))
+    app.drain()
+    assert app.volume == 75
+    now[0] = 112.3
+    settle(app)
+    assert calls == [45, 75] and app.volume_applied == 75
+
+
+def test_opposite_presses_cancel_before_any_http_request(app, monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr(ui, "volume_now", lambda: now[0])
+    monkeypatch.setattr(ui, "VOLUME_DEBOUNCE", 0.18)
+    app.volume = app.volume_applied = 40
+    app.key(curses.KEY_F12)
+    app.key(curses.KEY_F11)
+    now[0] += 1
+    app.drain()
+    assert app.volume == 40 and not app.test_calls

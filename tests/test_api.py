@@ -489,3 +489,36 @@ def test_track_start_does_not_overwrite_new_user_volume_with_old_preference(api)
     api.start({"id": "t"})
     volumes = [url for url in calls if "/volume?" in url]
     assert len(volumes) == 1 and "volume_percent=65" in volumes[0]
+
+
+def test_volume_limit_after_confirmed_playback_queues_restore_instead_of_failing_track(api):
+    callbacks = []
+    api.on_volume_retry = lambda *args: callbacks.append(args)
+    api.backend = SimpleNamespace(
+        device_id="d",
+        preferred_volume=65,
+        muted=False,
+        _events=lambda: None,
+        wait_playing=lambda *a, **kw: None,
+    )
+    mock(
+        api,
+        lambda request: (
+            httpx.Response(429, headers={"Retry-After": "12"})
+            if "/volume?" in str(request.url)
+            else httpx.Response(204)
+        ),
+    )
+    assert "Воспроизводится" in api.start({"id": "track"})
+    assert callbacks == [(65, 12, 0)]
+
+
+def test_fractional_retry_after_rounds_up_and_cannot_shorten_existing_backoff(api):
+    mock(api, lambda request: httpx.Response(429, headers={"Retry-After": "1.2"}))
+    with pytest.raises(RateLimited) as error:
+        api.request("PUT", "me/player/volume")
+    assert error.value.seconds == 2
+    until = api.rate_until
+    with pytest.raises(RateLimited):
+        api.request("PUT", "me/player/volume")
+    assert api.rate_until == until

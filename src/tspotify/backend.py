@@ -119,6 +119,7 @@ class Backend:
         self.muted = muted
         self.external = external
         self.preferred_volume = 0 if muted else session.load()["volume"]
+        self.confirmed_volume = 0
         self._volume_set_at = 0.0
         self.device_id = None
         self.on_authorize = on_authorize
@@ -185,6 +186,7 @@ class Backend:
             return False
 
     def start(self):
+        self.confirmed_volume = 0
         paths.prepare()
         binary = engine_path()
         self.log_started = time.time()

@@ -1,4 +1,4 @@
-"""Authenticated localhost commands for desktop shortcuts; never starts playback."""
+"""Authenticated localhost commands for desktop shortcuts; only forwards explicit user actions."""
 
 import hmac
 import json
@@ -10,7 +10,7 @@ import threading
 
 from . import paths
 
-ACTIONS = ("volume-up", "volume-down", "mute")
+ACTIONS = ("previous", "play-pause", "next", "mute", "volume-down", "volume-up")
 
 
 class ControlServer:
@@ -47,7 +47,13 @@ class ControlServer:
         paths.prepare()
         self.metadata = paths.DATA / "control.json"
         paths.private_json(
-            self.metadata, {"port": self.server.server_address[1], "pid": os.getpid(), "token": self.token}
+            self.metadata,
+            {
+                "port": self.server.server_address[1],
+                "pid": os.getpid(),
+                "token": self.token,
+                "actions": list(ACTIONS),
+            },
         )
         self.thread = threading.Thread(
             target=lambda: self.server.serve_forever(poll_interval=0.1),

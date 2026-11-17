@@ -10,6 +10,7 @@ import sys
 import time
 
 from . import paths
+from .api import RateLimited
 from .art import cover, logo, thumbnail, image_url
 from .audio import Audio
 
@@ -37,14 +38,11 @@ PANEL_NAMES = {
 API = None
 ASCII_ONLY = False
 NO_SPLASH = False
-VOLUME_FUNCTION_KEYS = {
-    curses.KEY_F7: "-",
-    curses.KEY_F8: "+",
-    curses.KEY_F9: "-",
-    curses.KEY_F10: "+",
-    curses.KEY_F11: "-",
-    curses.KEY_F12: "+",
-}
+VOLUME_FUNCTION_KEYS = {curses.KEY_F10: "m", curses.KEY_F11: "-", curses.KEY_F12: "+"}
+TRANSPORT_FUNCTION_KEYS = {curses.KEY_F7: "previous", curses.KEY_F8: "play-pause", curses.KEY_F9: "next"}
+VOLUME_DEBOUNCE = 0.18
+VOLUME_INTERVAL = 1.0
+volume_now = time.monotonic
 DEMO_MODE = False
 
 
@@ -90,6 +88,9 @@ class App:
         self.cover_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         self.events = queue.Queue()
         API.on_status = lambda message: self.events.put(("notice", message, None))
+        API.on_volume_retry = lambda target, seconds, applied: self.events.put(
+            ("volume_retry", (target, seconds, applied), None)
+        )
         self.pending = set()
         self.thumbnails = OrderedDict()
         self.library_data = {}
@@ -153,6 +154,11 @@ class App:
         self.running = True
         self.volume = getattr(API, "current_volume", 0)
         self.volume_local_until = 0.0
+        self.volume_applied = self.volume
+        self.volume_dirty = False
+        self.volume_due_at = 0.0
+        self.volume_retry_until = 0.0
+        self.volume_last_sent = float("-inf")
         self.muted_volume = getattr(API, "resume_data", {}).get("unmuted_volume", 35)
         self.audio = Audio(source=lambda: bool(API.backend and not getattr(API, "external", False)))
         self.colors = {}
@@ -266,6 +272,8 @@ class App:
         def run():
             try:
                 self.events.put((key, fn(*args), None))
+            except RateLimited as exc:
+                self.events.put((key, None, exc))
             except Exception as exc:
                 self.events.put((key, None, str(exc)))
 
@@ -307,16 +315,46 @@ class App:
             changed = True
             self.pending.discard(key)
             if key == "hotkey":
-                self.volume_key({"volume-up": "+", "volume-down": "-", "mute": "m"}[value])
+                if value in ("volume-up", "volume-down", "mute"):
+                    self.volume_key({"volume-up": "+", "volume-down": "-", "mute": "m"}[value])
+                else:
+                    self.command("playback", value)
+                continue
+            if key == "volume_retry":
+                target, seconds, applied = value
+                if not self.volume_dirty and "volume" not in self.pending:
+                    self.volume = target
+                self.volume_applied = applied
+                self.volume_dirty = True
+                self.volume_retry_until = volume_now() + seconds + 0.05
+                self.volume_due_at = max(self.volume_due_at, self.volume_retry_until)
+                self.volume_local_until = self.volume_due_at + 12
+                self.volume_wait_notice()
+                continue
+            if isinstance(error, RateLimited):
+                if key == "volume":
+                    self.volume_dirty = True
+                    self.volume_retry_until = volume_now() + error.seconds + 0.05
+                    self.volume_due_at = max(self.volume_due_at, self.volume_retry_until)
+                    self.volume_local_until = self.volume_due_at + 12
+                    self.volume_wait_notice()
+                elif not self.volume_dirty:
+                    self.notice = f"Spotify занят · запросы возобновятся через {error.seconds} с"
+                if key.startswith("library:"):
+                    self.library_requested.discard(key[8:])
                 continue
             if key == "volume":
                 if error:
+                    self.volume_dirty = False
                     self.notice = "Не удалось изменить громкость: " + error[:130]
                 else:
                     requested, message = value
-                    self.notice = message
-                    if self.volume != requested:
-                        self.send_volume()
+                    self.volume_applied = requested
+                    self.volume_dirty = self.volume != requested
+                    self.notice = (
+                        message if not self.volume_dirty else f"Громкость {self.volume}% · применяется…"
+                    )
+                    self.volume_due_at = max(self.volume_due_at, self.volume_last_sent + VOLUME_INTERVAL)
                 continue
             if key == "notice":
                 self.notice = value
@@ -375,10 +413,15 @@ class App:
             if key == "poll":
                 self.playback = value or {}
                 self.updated = time.monotonic()
-                if "volume" not in self.pending and time.monotonic() >= self.volume_local_until:
+                if (
+                    not self.volume_dirty
+                    and "volume" not in self.pending
+                    and volume_now() >= self.volume_local_until
+                ):
                     level = (self.playback.get("device") or {}).get("volume_percent")
                     if level is not None:
                         self.volume = level
+                        self.volume_applied = level
                 if time.monotonic() - self.last_checkpoint > 5:
                     self.checkpoint()
                 self.track_cover(self.playback.get("item") or {})
@@ -442,7 +485,10 @@ class App:
                     self.items = [("track", x) for x in self.saved_tracks.values()]
                     self.selected = max(0, min(self.selected, len(self.items) - 1))
                 self.library_data.pop("Любимые", None)
-        return changed
+        before = self.notice
+        sent = self.send_volume()
+        self.volume_wait_notice()
+        return changed or sent or self.notice != before
 
     def put(self, y, x, text, color=1, bold=False, width=None):
         h, w = self.s.getmaxyx()
@@ -705,7 +751,7 @@ class App:
         self.spectrum_area = (sy, 4, max(1, h - sy - 3), w - 8)
         self.spectrum(*self.spectrum_area)
         self.put(
-            h - 2, 4, f"Громкость {self.volume}% · ± / F7–F12 · F3/Esc назад · Ctrl+Q выход", 3, width=w - 8
+            h - 2, 4, f"Громкость {self.volume}% · ± / F11/F12 · F3/Esc назад · Ctrl+Q выход", 3, width=w - 8
         )
         self.put(h - 1, 4, self.notice, 4, width=w - 8)
 
@@ -760,7 +806,9 @@ class App:
             1,
             4,
             w - 2,
-            "БЕЗ ЗВУКА · + / F8 громче · m" if not self.volume else "Громкость · − / + · F7–F12 · m",
+            "БЕЗ ЗВУКА · + / F12 громче · F10"
+            if not self.volume
+            else "Громкость · − / + · F11/F12 · F10 mute",
         )
         self.hit(h - 4, 3, 1, 16, "volume", None)
         filled = round(self.volume * 16 / 100)
@@ -1147,7 +1195,8 @@ class App:
             ("Space", "Пауза / продолжить"),
             ("n / p", "Следующий / предыдущий трек"),
             ("+ / −", "Громкость ±5%"),
-            ("F7/9/11 · F8/10/12", "Тише / громче на 5%"),
+            ("F7 / F8 / F9", "Назад / играть-пауза / далее"),
+            ("F10 / F11 / F12", "Без звука / тише / громче"),
             ("m", "Выключить / вернуть звук"),
             ("f", "Текущий трек: добавить / убрать ♥"),
             ("1–3 · 4–8", "Библиотека · недавние, миксы, новинки"),
@@ -1194,16 +1243,41 @@ class App:
             if url:
                 self.submit("cover", lambda u=url: (u, cover(u, 256, 256)))
 
+    def volume_wait_notice(self):
+        if self.volume_dirty and volume_now() < self.volume_retry_until:
+            seconds = max(1, math.ceil(self.volume_retry_until - volume_now()))
+            self.notice = f"Громкость {self.volume}% в очереди · подтверждено {self.volume_applied}% · автоматически через {seconds} с"
+
     def send_volume(self):
-        if "volume" not in self.pending:
-            target = self.volume
-            self.submit("volume", lambda: (target, API.control("volume", str(target))))
+        if not self.volume_dirty or "volume" in self.pending:
+            return False
+        now = volume_now()
+        remaining = max(0.0, getattr(API, "rate_until", 0.0) - time.monotonic())
+        if remaining:
+            self.volume_retry_until = max(self.volume_retry_until, now + remaining + 0.05)
+            self.volume_due_at = max(self.volume_due_at, self.volume_retry_until)
+            self.volume_local_until = self.volume_due_at + 12
+        if now < self.volume_due_at or now < self.volume_last_sent + VOLUME_INTERVAL:
+            return False
+        target = self.volume
+        self.volume_last_sent = now
+        self.volume_dirty = False
+        self.submit("volume", lambda: (target, API.control("volume", str(target))))
+        return True
 
     def set_volume(self, value):
-        self.volume = max(0, min(100, int(value)))
-        self.volume_local_until = time.monotonic() + 12
-        self.notice = f"Громкость: {self.volume}%"
-        self.send_volume()
+        target = max(0, min(100, int(value)))
+        if target == self.volume:
+            return  # Holding a key at 0/100 must never flood Spotify.
+        self.volume = target
+        self.volume_dirty = "volume" in self.pending or self.volume != self.volume_applied
+        self.volume_due_at = max(
+            volume_now() + VOLUME_DEBOUNCE, self.volume_last_sent + VOLUME_INTERVAL, self.volume_retry_until
+        )
+        self.volume_local_until = self.volume_due_at + 12
+        self.notice = (
+            f"Громкость {self.volume}% · применяется…" if self.volume_dirty else f"Громкость: {self.volume}%"
+        )
 
     def volume_key(self, k):
         if k == "m":
@@ -1232,6 +1306,9 @@ class App:
             return
         if k in VOLUME_FUNCTION_KEYS:
             self.volume_key(VOLUME_FUNCTION_KEYS[k])
+            return
+        if k in TRANSPORT_FUNCTION_KEYS:
+            self.command("playback", TRANSPORT_FUNCTION_KEYS[k])
             return
         if self.layout_editor:
             if k in ("\x1b", "L"):

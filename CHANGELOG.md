@@ -2,6 +2,9 @@
 
 ## 0.1.0
 
+- Correct media mapping: F7 previous, F8 play/pause, F9 next, F10 mute, F11 quieter, F12 louder; migrates prior KDE bindings.
+- Debounced, paced volume writes discard unchanged boundary values and retry the latest target automatically after Spotify Retry-After.
+
 - Coalesced volume updates preserve rapid presses and reject stale poll levels; track startup cannot overwrite a newer user volume.
 - Optional KDE F7–F12 desktop bindings and authenticated local control work without terminal focus and release keys on exit.
 - Prioritized current-cover loading, appropriately sized CDN images and cached dotted rasters reduce artwork delays.

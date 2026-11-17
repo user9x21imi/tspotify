@@ -103,7 +103,8 @@ Desktop Spotify being installed is not the same as it being an available device:
 | `←`, `Backspace` | Return to the previous list |
 | `Space`, `n`, `p` | Play/pause, next, previous |
 | `+`, `-`, `m` | Volume, mute/restore |
-| `F7`/`F9`/`F11`, `F8`/`F10`/`F12` | Volume down / up by 5%, including during search and in dialogs |
+| `F7`, `F8`, `F9` | Previous track, play/pause, next track (also in search and dialogs) |
+| `F10`, `F11`, `F12` | Mute/restore, volume down 5%, volume up 5% |
 | `f` | Save / remove the current track from your library |
 | `1`, `2`, `3` | Playlists, liked tracks, albums |
 | `4`, `5`, `6`, `7`, `8` | Recent history, saved Spotify mixes, new releases, recommendations, saved daily mixes |
@@ -181,8 +182,10 @@ State is checkpointed while the UI runs and saved again on exit, including Ctrl+
 
 ### Volume keys with the terminal minimized
 
-In KDE Plasma, run `tspotify install-shortcuts` once, then restart the client. F7/F9/F11 decrease Spotify volume by 5%; F8/F10/F12 increase it by 5%, including while the terminal is minimized or another application has focus. The shortcuts belong to Spotify only while its interface is running and are released on normal exit. Existing shortcuts owned by other applications are not overwritten. Disable with `tspotify install-shortcuts --remove`.
+In KDE Plasma, run `tspotify install-shortcuts` once, then restart the client. F7 is previous track, F8 play/pause, F9 next track, F10 mute, F11 volume down 5%, and F12 volume up 5%, including while the terminal is minimized or another application has focus. The shortcuts belong to Spotify only while its interface is running and are released on normal exit. Existing shortcuts owned by other applications are not overwritten. Disable with `tspotify install-shortcuts --remove`.
 
 Other desktop environments can bind their shortcut settings to `tspotify control volume-up`, `tspotify control volume-down`, and `tspotify control mute`. These commands only contact the running client; they never launch a player or open login. Automatic global-key setup is currently KDE-specific. Ordinary terminal input alone cannot receive keys while unfocused.
 
 Volume presses are accumulated locally and serialized/coalesced to the newest requested value; stale playback polls do not replace that value. Current artwork has a separate worker from list thumbnails, selects a suitably sized CDN image, and caches the rendered dotted cells rather than recalculating them on every volume redraw.
+
+Volume changes wait 180 ms for a burst to settle and send at most one HTTP update per second. Repeats at 0%/100% are discarded. A Spotify 429 keeps only the newest requested level and retries automatically after Retry-After; the UI distinguishes queued volume from the last confirmed value.

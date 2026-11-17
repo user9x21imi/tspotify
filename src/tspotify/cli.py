@@ -112,7 +112,9 @@ def parser():
     control_parser = sub.add_parser(
         "control", help="control the running client without focusing its terminal"
     )
-    control_parser.add_argument("action", choices=("volume-up", "volume-down", "mute"))
+    control_parser.add_argument(
+        "action", choices=("previous", "play-pause", "next", "mute", "volume-down", "volume-up")
+    )
     sub.add_parser("update", help="check and install a release update after confirmation")
     sub.add_parser("doctor", help="show diagnostics without printing tokens")
     sub.add_parser("devices", help="list available Spotify Connect devices")

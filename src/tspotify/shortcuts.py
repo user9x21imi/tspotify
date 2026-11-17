@@ -8,7 +8,14 @@ import subprocess
 
 from . import paths
 
-COMPONENTS = {"volume-down": (7, 9, 11), "volume-up": (8, 10, 12)}
+COMPONENTS = {
+    "previous": (7,),
+    "play-pause": (8,),
+    "next": (9,),
+    "mute": (10,),
+    "volume-down": (11,),
+    "volume-up": (12,),
+}
 
 
 def call(method, *args):
@@ -53,8 +60,16 @@ def set_active(active):
                 code = 0x01000030 + number - 1
                 available = "true" in call("isGlobalShortcutAvailable", str(code), component).lower()
                 owner = call("action", str(code)) if not available else ""
-                if not available and (f"'{component}'" not in owner or "'_launch'" not in owner):
+                owned = (
+                    any(f"'tspotify-{name}.desktop'" in owner for name in COMPONENTS) and "'_launch'" in owner
+                )
+                if not available and not owned:
                     raise RuntimeError(f"F{number} уже используется другим системным сочетанием")
+    if active:
+        # Remove our former F7/F9/F11 and F8/F10/F12 volume groups before migration.
+        for action in COMPONENTS:
+            identity = json.dumps([f"tspotify-{action}.desktop", "_launch", "tspotify", action])
+            call("setShortcut", identity, "[]", "6")
     for action, functions in COMPONENTS.items():
         component = f"tspotify-{action}.desktop"
         identity = json.dumps([component, "_launch", "tspotify", action])
@@ -105,5 +120,11 @@ def install(remove=False):
         )
     paths.private_json(paths.CONFIG / "global-shortcuts.json", {"enabled": True})
     # Existing older processes have no control endpoint: register on next startup.
-    if (paths.DATA / "control.json").exists():
-        set_active(True)
+    try:
+        from .control import ACTIONS
+
+        endpoint = json.loads((paths.DATA / "control.json").read_text(encoding="utf-8"))
+        if endpoint.get("actions") == list(ACTIONS):
+            set_active(True)
+    except (OSError, ValueError):
+        pass

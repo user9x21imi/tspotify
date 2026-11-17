@@ -60,9 +60,21 @@ def test_own_shortcut_registration_can_be_refreshed(monkeypatch):
             return "(false,)"
         if method == "action":
             code = int(args[0])
-            action = "volume-down" if (code - 0x01000030 + 1) % 2 else "volume-up"
+            number = code - 0x01000030 + 1
+            action = next(name for name, keys in shortcuts.COMPONENTS.items() if number in keys)
             return f"(['tspotify-{action}.desktop', '_launch'],)"
         return "()"
 
     monkeypatch.setattr(shortcuts, "call", call)
     assert shortcuts.set_active(True)
+
+
+def test_desktop_shortcuts_match_the_requested_media_layout():
+    assert shortcuts.COMPONENTS == {
+        "previous": (7,),
+        "play-pause": (8,),
+        "next": (9,),
+        "mute": (10,),
+        "volume-down": (11,),
+        "volume-up": (12,),
+    }
