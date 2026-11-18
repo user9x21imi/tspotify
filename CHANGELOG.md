@@ -2,6 +2,9 @@
 
 ## 0.1.0
 
+- Focused search temporarily expands the result list above a compact player/spectrum, restoring the saved layout when returning to playback.
+- Search results stay expanded while moving between the input and list; Esc, player focus and F3 restore the usual arrangement.
+
 - Live search suggestions include cover thumbnails, artist, album and duration; stale replies cannot overwrite newer input.
 - Select tracks through native Connect load when available, without Web API play/device-discovery round trips.
 - Disable the embedded engine's competing custom queue; keep Spotify's native queue authoritative.

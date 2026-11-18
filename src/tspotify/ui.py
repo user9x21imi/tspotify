@@ -126,6 +126,8 @@ class App:
         self.layout_editor = False
         self.fullscreen = False
         self.focus_panel = "library"
+        self.search_layout = False
+        self.search_suspended = False
         self.hits = []
         self.layout_selected = 0
         self.order = DEFAULT_ORDER.copy()
@@ -304,6 +306,8 @@ class App:
         pool.submit(run)
 
     def library(self, section):
+        if self.search_layout:
+            self.leave_search_layout()
         self.fullscreen = False
         self.section = section
         self.selected = 0
@@ -505,6 +509,8 @@ class App:
                 self.search_cache[requested] = (time.monotonic(), result)
                 while len(self.search_cache) > 24:
                     self.search_cache.popitem(last=False)
+                if self.search_suspended:
+                    continue
                 if requested != self.query.strip():
                     self.search_due = max(self.search_due, time.monotonic())
                     continue
@@ -783,6 +789,18 @@ class App:
         if self.help and (wheel_up or wheel_down):
             self.help_offset = max(0, self.help_offset + (-3 if wheel_up else 3))
             return
+        # Panel focus also applies when the pointer hits a child control (seek, art).
+        if self.search_layout:
+            for py, px, ph, pw, action, panel in self.hits:
+                if (
+                    action == "panel"
+                    and panel in ("player", "spectrum")
+                    and py <= y < py + ph
+                    and px <= x < px + pw
+                ):
+                    self.leave_search_layout(panel)
+                    self.mouse_changed = True
+                    break
         for by, bx, height, width, action, value in reversed(self.hits):
             if not (by <= y < by + height and bx <= x < bx + width):
                 continue
@@ -790,6 +808,10 @@ class App:
                 panel = "library" if action == "row" else value
                 self.mouse_changed |= self.focus_panel != panel
                 self.focus_panel = panel
+                if clicked and panel == "search":
+                    self.enter_search_layout()
+                elif panel in ("player", "spectrum") and self.search_layout:
+                    self.leave_search_layout(panel)
                 if wheel_up or wheel_down:
                     if self.focus_panel == "library":
                         self.selected = max(
@@ -880,6 +902,7 @@ class App:
 
     def render(self):
         self.hits = []
+        self.spectrum_area = self.progress_area = None
         self.s.erase()
         h, w = self.s.getmaxyx()
         if h < 24 or w < 78:
@@ -919,8 +942,20 @@ class App:
             "spectrum": spectrum_h,
             "library": max(4, available - 3 - player_h - spectrum_h),
         }
+        order = self.order
+        if self.search_layout:
+            spectrum_h = 3 if self.show_spectrum and h >= 30 else 0
+            count = 4 if spectrum_h else 3
+            available = h - 8 - (count - 1)
+            heights = {
+                "search": 3,
+                "library": available - 3 - 6 - spectrum_h,
+                "player": 6,
+                "spectrum": spectrum_h,
+            }
+            order = ["search", "library", "player", "spectrum"]
         y = 2
-        for name in self.order:
+        for name in order:
             if heights[name]:
                 getattr(self, "render_" + name)(y, w, heights[name])
                 y += heights[name] + 1
@@ -945,7 +980,7 @@ class App:
             [
                 ("[Enter ▶]", "\n"),
                 ("[/ Поиск]", "/"),
-                ("[← Назад]", curses.KEY_LEFT),
+                ("[Esc Плеер]", "\x1b") if self.search_layout else ("[← Назад]", curses.KEY_LEFT),
                 ("[P Плейлист]", "P"),
                 ("[? Помощь]", "?"),
                 ("[Ctrl+Q Выход]", "\x11"),
@@ -1025,7 +1060,10 @@ class App:
         self.put(
             y + (2 if height < 11 else 4),
             x,
-            item.get("name", "Выберите музыку в библиотеке"),
+            (
+                item.get("name", "Выберите музыку в библиотеке")
+                + (" · " + artists(item) if self.search_layout else "")
+            ),
             1,
             True,
             width=width,
@@ -1105,21 +1143,27 @@ class App:
 
     def render_library(self, y, w, height):
         self.hit(y, 1, height, w - 2, "panel", "library")
-        self.box(y, 1, height, w - 2, "Библиотека · " + self.section, self.focus_panel == "library")
+        title = (
+            "Список · " + (self.query if self.section.startswith("Поиск:") else self.section)
+            if self.search_layout
+            else "Библиотека · " + self.section
+        )
+        self.box(y, 1, height, w - 2, title, self.focus_panel == "library")
         tx, ty = 3, y + 1
-        for index, section in enumerate(SECTIONS, 1):
+        if self.search_layout and height >= 8:
+            self.put(ty, tx, "Треки · Исполнители · Альбомы · Плейлисты    Esc — к плееру", 4, width=w - 6)
+        for index, section in enumerate(() if self.search_layout else SECTIONS, 1):
             text = f" {index} {section} "
             if tx + len(text) > w - 3:
                 tx, ty = 3, ty + 1
             self.put(ty, tx, text, 12 if self.section == section else 4)
             self.hit(ty, tx, 1, len(text), "key", str(index))
             tx += len(text) + 1
-        list_y = ty + 1
-        detailed_search = self.section.startswith("Поиск:")
-        thumbs = (
-            bool(self.items and (self.items[0][0] in ("playlist", "album") or detailed_search))
-            and height >= 7
-        )
+        list_y = y + 1 if self.search_layout and height < 8 else ty + 1
+        detailed_search = self.search_layout or self.section.startswith("Поиск:")
+        thumbs = bool(
+            self.items and (self.items[0][0] in ("playlist", "album") or detailed_search)
+        ) and height >= (5 if self.search_layout else 7)
         row_h = 3 if thumbs else 1
         rows = max(1, (y + height - 1 - list_y) // row_h)
         start = max(0, self.selected - rows + 1)
@@ -1186,7 +1230,16 @@ class App:
                 self.put(yy, int(w * 0.57), by, 6 if selected else 3, width=max(4, int(w * 0.27)))
             self.put(yy, w - 14, label, 6 if selected else 4)
         if not self.items:
-            self.put(list_y, 4, "Пусто · / поиск · 1–8 разделы библиотеки", 4)
+            empty = "Пусто · / поиск · 1–8 разделы библиотеки"
+            if self.search_layout:
+                empty = (
+                    "Начните вводить трек, исполнителя или альбом"
+                    if not self.query.strip()
+                    else "Ищу в Spotify…"
+                    if self.search_due or "search" in self.pending
+                    else "Ничего не найдено"
+                )
+            self.put(list_y, 4, empty, 4, width=w - 8)
 
     def load_thumbnail(self, kind, item):
         images = item.get("images") or (item.get("album") or {}).get("images") or []
@@ -1438,7 +1491,26 @@ class App:
                     self.prefetched_covers = {url}
                 self.submit("prefetch:" + url, cover, url, 256, 256)
 
+    def enter_search_layout(self):
+        already = self.search_layout
+        self.search_layout = True
+        self.search_suspended = False
+        self.fullscreen = False
+        self.editing = True
+        self.focus_panel = "search"
+        if self.query.strip() and not already:
+            self.schedule_search()
+
+    def leave_search_layout(self, panel="player"):
+        self.search_layout = False
+        self.search_suspended = True
+        self.search_due = 0
+        self.editing = False
+        self.focus_panel = panel
+
     def schedule_search(self):
+        self.search_layout = True
+        self.search_suspended = False
         query = self.query.strip()
         self.section = "Поиск: " + query
         candidates = dict(self.saved_tracks)
@@ -1484,6 +1556,8 @@ class App:
         self.submit("search", lambda q: {"_query": q, "_results": API.search(q)}, query)
 
     def update_live_search(self):
+        if self.search_suspended:
+            return
         if self.search_due and time.monotonic() >= self.search_due:
             self.dispatch_search()
 
@@ -1549,6 +1623,7 @@ class App:
             self.mouse()
             return
         if k == curses.KEY_F3:
+            self.leave_search_layout()
             self.fullscreen = not self.fullscreen
             self.editing = self.help = self.layout_editor = False
             return
@@ -1594,8 +1669,15 @@ class App:
             if k in ("?", "\x1b", "q", curses.KEY_F1):
                 self.help = False
             return
+        if k == "\x1b" and self.search_layout:
+            self.leave_search_layout()
+            return
         if k == "\t":
-            self.editing = not self.editing
+            if self.editing:
+                self.editing = False
+                self.focus_panel = "library"
+            else:
+                self.enter_search_layout()
             return
         if self.editing:
             if k == "\x1b":
@@ -1605,6 +1687,7 @@ class App:
                     self.notice = "Поиск…"
                     self.dispatch_search()
                     self.editing = False
+                    self.focus_panel = "library"
             elif k == curses.KEY_DOWN and self.items:
                 self.editing = False
                 self.focus_panel = "library"
@@ -1618,6 +1701,8 @@ class App:
         if k in ("?", curses.KEY_F1):
             self.help = True
         elif k == "L":
+            if self.search_layout:
+                self.leave_search_layout()
             self.fullscreen = False
             self.layout_editor = True
         elif k == "a":
@@ -1625,8 +1710,7 @@ class App:
             self.art_mode = modes[(modes.index(self.art_mode) + 1) % 3] if self.art_mode in modes else "auto"
             self.save_layout()
         elif k in ("/", curses.KEY_F2):
-            self.fullscreen = False
-            self.editing = True
+            self.enter_search_layout()
         elif k == "q":
             self.running = False
         elif k == "f":

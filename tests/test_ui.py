@@ -1011,3 +1011,63 @@ def test_remote_search_enriches_local_card_without_moving_selection(app):
     assert len(app.items) == 2
     assert app.items[1][1]["album"] == album
     assert "track:b" not in app.thumbnails
+
+
+def test_search_temporarily_reorders_panels_without_changing_saved_layout(app):
+    settle(app)
+    configured = ["spectrum", "library", "player", "search"]
+    app.order = configured.copy()
+    app.save_layout()
+    before = ui.CONFIG.read_bytes()
+    app.key("/")
+    app.render()
+    panels = {hit[5]: hit for hit in app.hits if hit[4] == "panel"}
+    assert panels["search"][0] < panels["library"][0] < panels["player"][0] < panels["spectrum"][0]
+    assert panels["library"][2] > panels["player"][2] + panels["spectrum"][2]
+    assert any("Список" in text for _, _, text in app.s.calls)
+    app.key("\t")
+    assert app.search_layout and not app.editing
+    app.key("\x1b")
+    app.render()
+    panels = {hit[5]: hit for hit in app.hits if hit[4] == "panel"}
+    assert sorted(panels, key=lambda name: panels[name][0]) == configured
+    assert app.order == configured
+    assert ui.CONFIG.read_bytes() == before
+
+
+def test_mouse_focus_on_now_playing_restores_normal_layout(app, monkeypatch):
+    app.key("/")
+    app.render()
+    player = next(hit for hit in app.hits if hit[4:] == ("panel", "player"))
+    monkeypatch.setattr(curses, "getmouse", lambda: (0, 2, player[0] + 1, 0, curses.REPORT_MOUSE_POSITION))
+    app.mouse()
+    assert not app.search_layout
+    assert app.focus_panel == "player"
+    assert not app.editing
+
+
+@pytest.mark.parametrize("size", [(24, 78), (30, 90), (48, 140)])
+def test_search_results_and_compact_player_fit_terminal(app, size):
+    app.s.size = size
+    app.key("/")
+    app.query = "tom"
+    app.schedule_search()
+    app.render()
+    panels = [hit for hit in app.hits if hit[4] == "panel"]
+    assert all(y + height <= size[0] - 5 for y, _, height, _, _, _ in panels)
+    assert next(hit[2] for hit in panels if hit[5] == "library") >= 5
+
+
+def test_search_reply_after_returning_to_player_cannot_reopen_search(app):
+    settle(app)
+    app.key("/")
+    app.query = "tom"
+    app.schedule_search()
+    app.leave_search_layout()
+    current = list(app.items)
+    app.events.put(
+        ("search", {"_query": "tom", "_results": {"tracks": [{"id": "late", "name": "Late"}]}}, None)
+    )
+    app.drain()
+    assert not app.search_layout
+    assert app.items == current
