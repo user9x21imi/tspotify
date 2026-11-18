@@ -1071,3 +1071,95 @@ def test_search_reply_after_returning_to_player_cannot_reopen_search(app):
     app.drain()
     assert not app.search_layout
     assert app.items == current
+
+
+def open_filter_context(app, kind="playlist"):
+    settle(app)
+    tracks = [
+        {"id": "a" * 22, "name": "First", "artists": [{"name": "Alice"}], "album": {"name": "One"}},
+        {"id": "b" * 22, "name": "Second", "artists": [{"name": "Bob"}], "album": {"name": "Two"}},
+        {"id": "c" * 22, "name": "Last", "artists": [{"name": "Alice"}], "album": {"name": "Three"}},
+    ]
+    app.events.put(
+        ("open", {"name": "Collection", "tracks": tracks, "context_uri": f"spotify:{kind}:collection"}, None)
+    )
+    app.drain()
+    return tracks
+
+
+@pytest.mark.parametrize("kind", ["playlist", "album"])
+def test_search_inside_collection_filters_without_spotify_request(app, kind):
+    tracks = open_filter_context(app, kind)
+    app.key("/")
+    for letter in "bob two":
+        app.key(letter)
+    app.update_live_search()
+    assert app.search_scope == "context"
+    assert app.items == [("track", tracks[1])]
+    assert not any(call[0] == "search" for call in app.test_calls)
+    app.query = ""
+    app.schedule_search()
+    assert len(app.items) == 3
+
+
+def test_play_from_filtered_list_preserves_original_playlist_queue(app):
+    tracks = open_filter_context(app)
+    app.key("/")
+    app.query = "second"
+    app.schedule_search()
+    app.key("\n")
+    app.key("\n")
+    settle(app)
+    played = next(args[0] for name, args in app.test_calls if name == "start")
+    assert played["id"] == tracks[1]["id"]
+    assert played["_queue_uris"] == ["spotify:track:" + track["id"] for track in tracks]
+    assert played["_context_uri"] == "spotify:playlist:collection"
+
+
+def test_f2_keeps_global_search_available_inside_playlist(app):
+    open_filter_context(app)
+    app.key("/")
+    app.query = "bob"
+    app.schedule_search()
+    app.key(curses.KEY_F2)
+    assert app.search_scope == "spotify"
+    app.query = "everywhere"
+    app.dispatch_search()
+    settle(app)
+    assert ("search", ("everywhere",)) in app.test_calls
+
+
+def test_escape_clears_collection_filter_and_restores_all_tracks(app):
+    open_filter_context(app)
+    app.key("/")
+    app.query = "first"
+    app.schedule_search()
+    assert len(app.items) == 1
+    app.key("\x1b")
+    assert len(app.items) == 3
+    assert not app.query
+    assert not app.search_layout
+
+
+def test_global_reply_cannot_replace_local_playlist_filter(app):
+    open_filter_context(app)
+    app.key("/")
+    app.query = "first"
+    app.schedule_search()
+    app.events.put(("search", {"_query": "first", "_results": {"tracks": [{"id": "outside"}]}}, None))
+    app.drain()
+    assert len(app.items) == 1 and app.items[0][1]["name"] == "First"
+
+
+def test_back_from_global_search_restores_complete_collection(app):
+    open_filter_context(app)
+    app.key("/")
+    app.query = "second"
+    app.schedule_search()
+    app.key(curses.KEY_F2)
+    app.key("\x1b")
+    app.key(curses.KEY_LEFT)
+    assert app.search_scope == "context"
+    assert app.section == "Collection"
+    assert len(app.items) == 3
+    assert app.items[app.selected][1]["name"] == "Second"

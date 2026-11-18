@@ -2,6 +2,9 @@
 
 ## 0.1.0
 
+- Search inside an open playlist/album instantly by track, artist or album; F2 keeps global Spotify search available.
+- Filtering keeps the original playback queue, and clearing the field/Esc restores all collection tracks.
+
 - Focused search temporarily expands the result list above a compact player/spectrum, restoring the saved layout when returning to playback.
 - Search results stay expanded while moving between the input and list; Esc, player focus and F3 restore the usual arrangement.
 

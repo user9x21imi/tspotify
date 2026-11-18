@@ -120,6 +120,12 @@ class App:
         self.query = ""
         self.search_due = 0.0
         self.search_cache = OrderedDict()
+        self.search_scope = "spotify"
+        self.global_query = ""
+        self.context_query = ""
+        self.context_items = None
+        self.context_section = ""
+        self.context_kind = "список"
         self.editing = False
         self.help = False
         self.help_offset = 0
@@ -306,6 +312,8 @@ class App:
         pool.submit(run)
 
     def library(self, section):
+        self.set_search_scope("spotify")
+        self.context_items = None
         if self.search_layout:
             self.leave_search_layout()
         self.fullscreen = False
@@ -401,6 +409,8 @@ class App:
                     self.thumbnails.popitem(last=False)
                 continue
             if error:
+                if key == "search" and (self.search_scope == "context" or self.search_suspended):
+                    continue
                 if key == "transport":
                     self.transport_queue.clear()
                 if key == "command" and self.queued_start:
@@ -509,7 +519,7 @@ class App:
                 self.search_cache[requested] = (time.monotonic(), result)
                 while len(self.search_cache) > 24:
                     self.search_cache.popitem(last=False)
-                if self.search_suspended:
+                if self.search_suspended or self.search_scope == "context":
                     continue
                 if requested != self.query.strip():
                     self.search_due = max(self.search_due, time.monotonic())
@@ -559,16 +569,35 @@ class App:
                 tracks = data.get("tracks", [])
                 if isinstance(tracks, dict):
                     tracks = tracks.get("items", [])
-                self.history.append((self.section, self.items, self.selected))
+                previous_items = (
+                    self.context_items
+                    if self.search_scope == "context" and self.context_items is not None
+                    else self.items
+                )
+                previous_id = self.items[self.selected][1].get("id") if self.items else None
+                previous_selected = next(
+                    (i for i, (_, item) in enumerate(previous_items) if item.get("id") == previous_id), 0
+                )
+                self.history.append((self.section, previous_items, previous_selected))
                 self.section = (data.get("playlist") or data.get("album") or data).get("name", "Треки")
                 for track in tracks:
                     if isinstance(track, dict):
-                        track["_context_uri"] = data.get("context_uri")
+                        target = track["track"] if isinstance(track.get("track"), dict) else track
+                        target["_context_uri"] = data.get("context_uri")
                 self.items = [
                     ("track", x["track"] if isinstance(x.get("track"), dict) else x)
                     for x in tracks
                     if isinstance(x, dict) and x.get("id", x.get("track"))
                 ]
+                self.context_items = list(self.items)
+                self.context_section = self.section
+                uri = data.get("context_uri") or ""
+                self.context_kind = uri.split(":")[1] if uri.count(":") >= 2 else "список"
+                self.context_query = ""
+                self.set_search_scope("context")
+                self.query = ""
+                self.search_due = 0
+                self.search_suspended = True
                 self.selected = 0
                 self.restore_selected_row()
                 self.notice = f"Треков: {len(self.items)} · Enter слушать · ← назад"
@@ -999,10 +1028,20 @@ class App:
 
     def render_search(self, y, w, height):
         self.hit(y, 1, height, w - 2, "panel", "search")
-        self.box(y, 1, height, w - 2, "Поиск · / или F2", self.editing or self.focus_panel == "search")
+        label = "Поиск · / или F2"
+        if self.search_scope == "context" and self.context_items is not None:
+            where = {"album": "альбоме", "playlist": "плейлисте"}.get(self.context_kind, "списке")
+            label = "Поиск в " + where + " · /"
+        self.box(y, 1, height, w - 2, label, self.editing or self.focus_panel == "search")
+        if self.search_scope == "context":
+            self.button(y, w - 17, "[F2 Spotify]", curses.KEY_F2)
         self.search_y = y + 1
         self.put(y + 1, 3, "›", 2)
-        hint = "Трек, исполнитель, альбом или плейлист…"
+        hint = (
+            "Найти трек в этом списке…"
+            if self.search_scope == "context"
+            else "Трек, исполнитель, альбом или плейлист…"
+        )
         self.put(y + 1, 5, self.query or hint, 1 if self.editing else 4, width=w - 9)
 
     def render_player(self, y, w, height):
@@ -1385,7 +1424,8 @@ class App:
     def render_help(self, h, w):
         self.hits = []
         lines = [
-            ("/ или F2", "Ввести поисковый запрос"),
+            ("/ или строка поиска", "В альбоме/плейлисте — поиск внутри списка"),
+            ("F2", "Общий поиск Spotify"),
             ("Ввод в поиске", "Подсказки: обложка, трек, автор, альбом, время"),
             ("↓ / Tab в поиске", "Перейти к результатам"),
             ("Enter в поиске", "Найти музыку сразу"),
@@ -1441,7 +1481,12 @@ class App:
 
     def start_track(self, item):
         item = dict(item)
-        tracks = [track for kind, track in self.items if kind == "track" and len(track.get("id", "")) == 22]
+        queue_items = (
+            self.context_items
+            if self.search_scope == "context" and self.context_items is not None
+            else self.items
+        )
+        tracks = [track for kind, track in queue_items if kind == "track" and len(track.get("id", "")) == 22]
         index = next((i for i, track in enumerate(tracks) if track.get("id") == item.get("id")), None)
         if index is not None:
             first = max(0, index - 20) if len(tracks) > 100 else 0
@@ -1474,6 +1519,13 @@ class App:
     def prefetch_nearby(self):
         # Load a bounded window while the user browses, before Enter/Next.
         nearby = self.items[max(0, self.selected - 1) : self.selected + 5]
+        if self.search_scope == "context" and self.context_items and self.items:
+            identity = self.items[self.selected][1].get("id")
+            index = next(
+                (i for i, (_, item) in enumerate(self.context_items) if item.get("id") == identity), None
+            )
+            if index is not None:
+                nearby += self.context_items[index + 1 : index + 4]
         for kind, item in nearby:
             if kind != "track":
                 continue
@@ -1491,14 +1543,63 @@ class App:
                     self.prefetched_covers = {url}
                 self.submit("prefetch:" + url, cover, url, 256, 256)
 
-    def enter_search_layout(self):
+    def set_search_scope(self, scope):
+        if scope == self.search_scope:
+            return
+        if self.search_scope == "context":
+            self.context_query = self.query
+        else:
+            self.global_query = self.query
+        self.search_scope = scope
+        self.query = self.context_query if scope == "context" else self.global_query
+
+    def filter_context(self):
+        if self.context_items is None:
+            return
+        words = self.query.casefold().split()
+        selected_id = (
+            self.items[self.selected][1].get("id") if self.items and self.selected < len(self.items) else None
+        )
+        self.items = []
+        for kind, item in self.context_items:
+            text = " ".join(
+                (
+                    item.get("name", ""),
+                    artists(item),
+                    (
+                        (item.get("album") or {}).get("name")
+                        or (self.context_section if self.context_kind == "album" else "")
+                    ),
+                )
+            ).casefold()
+            if all(word in text for word in words):
+                self.items.append((kind, item))
+        self.selected = next(
+            (i for i, (_, item) in enumerate(self.items) if item.get("id") == selected_id), 0
+        )
+        self.context_query = self.query
+        self.section = self.context_section
+        self.search_due = 0
+        self.search_suspended = True
+        self.notice = (
+            f"В списке: {len(self.items)} / {len(self.context_items)} · Esc очистить · F2 весь Spotify"
+        )
+
+    def enter_search_layout(self, scope=None):
         already = self.search_layout
+        previous_scope = self.search_scope
+        local = self.context_items is not None and (
+            self.section == self.context_section or self.search_scope == "context"
+        )
+        self.set_search_scope(scope or ("context" if local else "spotify"))
         self.search_layout = True
         self.search_suspended = False
         self.fullscreen = False
         self.editing = True
         self.focus_panel = "search"
-        if self.query.strip() and not already:
+        if self.search_scope == "context":
+            self.filter_context()
+        elif self.query.strip() and (not already or previous_scope != self.search_scope):
             self.schedule_search()
 
     def leave_search_layout(self, panel="player"):
@@ -1509,6 +1610,9 @@ class App:
         self.focus_panel = panel
 
     def schedule_search(self):
+        if self.search_scope == "context":
+            self.filter_context()
+            return
         self.search_layout = True
         self.search_suspended = False
         query = self.query.strip()
@@ -1546,6 +1650,9 @@ class App:
             self.search_due = time.monotonic() + 0.18 if query else 0
 
     def dispatch_search(self):
+        if self.search_scope == "context":
+            self.filter_context()
+            return
         query = self.query.strip()
         if not query:
             self.search_due = 0
@@ -1633,6 +1740,20 @@ class App:
         if k == curses.KEY_RESIZE:
             self.s.clear()
             return
+        if k == curses.KEY_F2:
+            if self.search_scope == "context" and self.context_items is not None:
+                identity = self.items[self.selected][1].get("id") if self.items else None
+                index = next(
+                    (i for i, (_, item) in enumerate(self.context_items) if item.get("id") == identity), 0
+                )
+                self.history.append((self.context_section, self.context_items, index))
+            self.help = False
+            self.enter_search_layout("spotify")
+            if not self.query.strip():
+                self.section = "Поиск: "
+                self.items = []
+                self.selected = 0
+            return
         if k in VOLUME_FUNCTION_KEYS:
             self.volume_key(VOLUME_FUNCTION_KEYS[k])
             return
@@ -1670,7 +1791,10 @@ class App:
                 self.help = False
             return
         if k == "\x1b" and self.search_layout:
-            self.leave_search_layout()
+            if self.search_scope == "context" and self.query:
+                self.query = ""
+                self.filter_context()
+            self.leave_search_layout("library" if self.search_scope == "context" else "player")
             return
         if k == "\t":
             if self.editing:
@@ -1683,7 +1807,7 @@ class App:
             if k == "\x1b":
                 self.editing = False
             elif k in ("\n", "\r", curses.KEY_ENTER):
-                if self.query.strip():
+                if self.query.strip() or self.search_scope == "context":
                     self.notice = "Поиск…"
                     self.dispatch_search()
                     self.editing = False
@@ -1747,6 +1871,21 @@ class App:
                 self.submit("open", open_context, kind, item["id"], item.get("name", "Треки"))
         elif k in (curses.KEY_LEFT, curses.KEY_BACKSPACE, "\x7f", "\b") and self.history:
             self.section, self.items, self.selected = self.history.pop()
+            uri = (self.items[0][1].get("_context_uri") or "") if self.items else ""
+            if (
+                uri
+                and not self.section.startswith("Поиск:")
+                and all(kind == "track" for kind, _ in self.items)
+            ):
+                self.context_items = list(self.items)
+                self.context_section = self.section
+                self.context_kind = uri.split(":")[1] if uri.count(":") >= 2 else "список"
+                self.context_query = ""
+                self.set_search_scope("context")
+                self.query = ""
+            else:
+                self.context_items = None
+                self.set_search_scope("spotify")
         elif k in ("+", "=", "-", "m"):
             self.volume_key(k)
         elif k in (" ", "n", "p", "s", "r"):
