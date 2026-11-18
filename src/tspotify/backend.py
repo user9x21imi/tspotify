@@ -124,6 +124,8 @@ class Backend:
         self.external = external
         self.preferred_volume = 0 if muted else session.load()["volume"]
         self.local_enabled = False
+        self.local_load = False
+        self.local_queue = False
         self.confirmed_volume = 0
         self._volume_set_at = 0.0
         self.device_id = None
@@ -184,6 +186,13 @@ class Backend:
             raise RuntimeError("Локальный движок не подтвердил команду")
         return result
 
+    def load_track(self, uri, context_uri=None, position_ms=0, uris=None):
+        payload = {"uri": uri, "context_uri": context_uri}
+        if uris:
+            payload["uris"] = uris[:100]
+        command = "load:" + json.dumps(payload, separators=(",", ":"))
+        self.local_control(command, position_ms)
+
     def alive(self):
         return self.pty.isalive() if self.pty else bool(self.process and self.process.poll() is None)
 
@@ -198,7 +207,13 @@ class Backend:
             return False
 
     def start(self):
+        if self.ready():
+            raise RuntimeError(
+                "Порт встроенного плеера уже занят другим экземпляром tspotify. Закройте его перед запуском."
+            )
         self.confirmed_volume = 0
+        self._volume_active = False
+        self._audio_output_ready = False
         paths.prepare()
         binary = engine_path()
         self.log_started = time.time()
@@ -213,6 +228,7 @@ playback_refresh_duration_in_ms = 0
 enable_streaming = "{"Never" if self.external else "Always"}"
 enable_media_control = false
 pause_on_startup = false
+custom_queue = false
 [device]
 name = "tspotify"
 device_type = "speaker"
@@ -283,6 +299,8 @@ audio_cache = true
         try:
             capabilities = self.request({"Local": {"command": "capabilities", "value": 0}}, timeout=0.2)
             self.local_enabled = capabilities.get("protocol") == 1
+            self.local_load = bool(capabilities.get("local_load"))
+            self.local_queue = bool(capabilities.get("local_queue"))
         except (OSError, RuntimeError, AttributeError):
             self.local_enabled = False
         if self.local_enabled and not self.external:
@@ -384,6 +402,11 @@ audio_cache = true
                 text = stream.read().decode(errors="replace")
         except OSError:
             return
+        identities = re.findall(r"Initializing a new integrated player with device_id=([0-9a-f-]+)", text)
+        if identities and identities[-1] != self.device_id:
+            self.device_id = identities[-1]
+            self._volume_active = False
+            self._audio_output_ready = False
         matches = list(
             re.finditer(
                 r"Got a new player event: (Playing|Paused) \{ playable_id: Track\(TrackId\(\"([^\"]+)\"\)\), position_ms: (\d+)",
@@ -419,21 +442,24 @@ audio_cache = true
                 self.failure = match[1]
                 self.failure_at = time.monotonic()
 
-    def wait_playing(self, track_id, since, timeout=25):
+    def wait_playing(self, track_id, since, timeout=25, cancelled=None, position_ms=None):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
+            if cancelled and cancelled():
+                return
             self._events()
             if (
                 self.event.get("track_id") == track_id
                 and self.event.get("playing")
                 and self.event.get("at", 0) >= since
+                and (position_ms is None or abs(self.event.get("position", 0) - position_ms) < 2000)
             ):
                 return
             if self.failure == track_id and self.failure_at >= since:
                 raise RuntimeError(
                     "Spotify не смог загрузить аудио этого трека. Повторите или выберите другое устройство."
                 )
-            if self.stopped.wait(0.25):
+            if self.stopped.wait(0.02 if self.local_enabled else 0.25):
                 break
         raise RuntimeError(
             "Запуск трека не подтверждён: проверьте сеть или выберите настольный Spotify как устройство."
@@ -441,7 +467,8 @@ audio_cache = true
 
     def playback(self, fallback):
         self._events()
-        if time.monotonic() - self._snapshot_time > 5:
+        changed = bool(self.event and (self._base.get("item") or {}).get("id") != self.event.get("track_id"))
+        if time.monotonic() - self._snapshot_time > (0.1 if changed else 5):
             try:
                 self._base = self.request({"Get": {"Key": "Playback"}}, timeout=0.7) or {}
                 self._snapshot_time = time.monotonic()
@@ -453,7 +480,9 @@ audio_cache = true
         if fallback.get("_observed_at", 0) > self.event.get("at", 0):
             observed = dict(fallback)
             if observed.get("is_playing"):
-                elapsed = max(0, time.monotonic() - observed["_observed_at"])
+                elapsed = max(
+                    0, time.monotonic() - observed.get("_observed_progress_at", observed["_observed_at"])
+                )
                 observed["progress_ms"] = (
                     observed.get("_observed_progress_ms", observed.get("progress_ms", 0)) + elapsed * 1000
                 )

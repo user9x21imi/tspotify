@@ -2,6 +2,13 @@
 
 ## 0.1.0
 
+- Live search suggestions include cover thumbnails, artist, album and duration; stale replies cannot overwrite newer input.
+- Select tracks through native Connect load when available, without Web API play/device-discovery round trips.
+- Disable the embedded engine's competing custom queue; keep Spotify's native queue authoritative.
+- Preload nearby artwork and metadata; update native playback state every 100 ms and immediately after commands.
+- Background remote observation and missing metadata no longer block local playback updates.
+- Preserve repeated transport inputs and allow replacing a pending track selection.
+
 - Use Spotify access-point port 443 instead of hanging on blocked port 4070; network startup timeouts no longer incorrectly request another login.
 
 - Keep the preferred volume separate from the engine's temporary boot mute; save volume at each user adjustment.

@@ -1,7 +1,7 @@
 """Curses interface. The same dotted renderer runs in Windows Terminal, macOS and Linux."""
 
 import concurrent.futures
-from collections import OrderedDict
+from collections import OrderedDict, deque
 import curses
 import json
 import math
@@ -11,7 +11,7 @@ import time
 
 from . import paths
 from .api import RateLimited
-from .art import cover, logo, thumbnail, image_url
+from .art import cover, logo, thumbnail, image_url, cached_cover
 from .audio import Audio
 
 HOME = paths.HOME
@@ -85,8 +85,10 @@ class App:
             pass
         self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=4)
         self.art_pool = concurrent.futures.ThreadPoolExecutor(max_workers=4)
-        self.cover_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        self.transport_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+        self.cover_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+        self.transport_pool = concurrent.futures.ThreadPoolExecutor(max_workers=3)
+        self.state_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        self.search_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         self.events = queue.Queue()
         API.on_status = lambda message: self.events.put(("notice", message, None))
         API.on_volume_retry = lambda target, seconds, applied: self.events.put(
@@ -103,6 +105,9 @@ class App:
         self.restore_selection = self.resume_view or None
         self.last_checkpoint = time.monotonic()
         self.updated = time.monotonic()
+        self.prefetched_covers = set()
+        self.transport_queue = deque(maxlen=32)
+        self.queued_start = None
         self.art_url = ""
         self.art = []
         self.dot_cache = OrderedDict()
@@ -113,6 +118,8 @@ class App:
         self.smooth_bars = [0.0] * 32
         self.smooth_time = time.monotonic()
         self.query = ""
+        self.search_due = 0.0
+        self.search_cache = OrderedDict()
         self.editing = False
         self.help = False
         self.help_offset = 0
@@ -270,7 +277,7 @@ class App:
         if key in self.pending:
             return
         self.pending.add(key)
-        if key == "command":
+        if key in ("command", "transport"):
             self.transport_revision += 1
         revision = self.transport_revision
 
@@ -286,7 +293,13 @@ class App:
                 self.events.put((key, None, str(exc)))
 
         pool = self.cover_pool if key == "cover" else self.art_pool if key.startswith("thumb:") else self.pool
-        if key in ("volume", "command"):
+        if key.startswith("prefetch:"):
+            pool = self.art_pool
+        if key == "poll":
+            pool = self.state_pool
+        if key == "search":
+            pool = self.search_pool
+        if key in ("volume", "command", "transport"):
             pool = self.transport_pool
         pool.submit(run)
 
@@ -324,6 +337,8 @@ class App:
                 break
             changed = True
             self.pending.discard(key)
+            if key.startswith("prefetch:"):
+                continue
             if key == "hotkey":
                 if value == "quit":
                     self.running = False
@@ -382,9 +397,21 @@ class App:
                     self.thumbnails.popitem(last=False)
                 continue
             if error:
+                if key == "transport":
+                    self.transport_queue.clear()
+                if key == "command" and self.queued_start:
+                    item, self.queued_start = self.queued_start, None
+                    self.start_track(item)
+                    continue
                 if key.startswith("library:"):
                     self.library_requested.discard(key[8:])
-                if key == "poll" and API.backend and ("Connection refused" in error or "timed out" in error):
+                if (
+                    key == "poll"
+                    and API.backend
+                    and hasattr(API.backend, "alive")
+                    and not API.backend.alive()
+                    and ("Connection refused" in error or "timed out" in error)
+                ):
                     self.notice = "Переподключаю фоновый плеер…"
                     self.submit("reconnect", API.backend.restart)
                     continue
@@ -433,6 +460,12 @@ class App:
                     continue
                 now = time.monotonic()
                 old = self.playback
+                if (
+                    old.get("is_loading")
+                    and "command" in self.pending
+                    and (incoming.get("item") or {}).get("id") != (old.get("item") or {}).get("id")
+                ):
+                    continue
                 same = (old.get("item") or {}).get("id") == (incoming.get("item") or {}).get("id")
                 if same and old.get("is_playing") and incoming.get("is_playing"):
                     expected = (old.get("progress_ms") or 0) + max(0, now - self.updated) * 1000
@@ -441,6 +474,10 @@ class App:
                         incoming = {**incoming, "progress_ms": expected}
                 self.playback = incoming
                 self.updated = now
+                if incoming.get("is_playing") and self.notice.startswith(
+                    ("Воспроизводится:", "Переподключаю", "Плеер подключён", "Команда выполнена")
+                ):
+                    self.notice = ""
                 if (
                     (not getattr(API, "backend", None) or getattr(API, "external", False))
                     and not self.volume_dirty
@@ -461,16 +498,39 @@ class App:
                 elif self.art_url:
                     self.submit("cover", lambda u=self.art_url: (u, cover(u, 256, 256)))
             elif key == "search":
+                requested = (
+                    value.get("_query", self.query.strip()) if isinstance(value, dict) else self.query.strip()
+                )
+                result = value.get("_results", value) if isinstance(value, dict) else value
+                self.search_cache[requested] = (time.monotonic(), result)
+                while len(self.search_cache) > 24:
+                    self.search_cache.popitem(last=False)
+                if requested != self.query.strip():
+                    self.search_due = max(self.search_due, time.monotonic())
+                    continue
+                value = result
+                old_items = self.items if self.section == "Поиск: " + self.query else []
+                selected_id = (
+                    old_items[self.selected][1].get("id")
+                    if old_items and self.selected < len(old_items)
+                    else None
+                )
                 self.section = "Поиск: " + self.query
-                self.items = []
+                self.items = list(old_items)
+                seen = {(kind, item.get("id")) for kind, item in self.items}
                 for kind, name in [
                     ("track", "tracks"),
                     ("album", "albums"),
                     ("artist", "artists"),
                     ("playlist", "playlists"),
                 ]:
-                    self.items.extend((kind, item) for item in (value or {}).get(name, []) if item)
-                self.selected = 0
+                    for item in (value or {}).get(name, []):
+                        if item and (kind, item.get("id")) not in seen:
+                            self.items.append((kind, item))
+                            seen.add((kind, item.get("id")))
+                self.selected = next(
+                    (i for i, (_, item) in enumerate(self.items) if item.get("id") == selected_id), 0
+                )
                 self.restore_selected_row()
                 self.notice = f"Найдено: {len(self.items)} · Enter — слушать"
             elif key == "open":
@@ -493,13 +553,21 @@ class App:
                 self.selected = 0
                 self.restore_selected_row()
                 self.notice = f"Треков: {len(self.items)} · Enter слушать · ← назад"
-            elif key == "command":
+            elif key in ("command", "transport"):
                 self.transport_revision += 1
                 if getattr(API, "local_controls", False) and getattr(API, "last_playback", None):
                     self.playback = dict(API.last_playback)
                     self.updated = time.monotonic()
-                self.notice = value if isinstance(value, str) else "Команда подтверждена"
+                self.notice = (
+                    value if isinstance(value, str) and not value.startswith("Воспроизводится:") else ""
+                )
                 self.track_cover((getattr(API, "last_playback", {}) or {}).get("item") or {})
+                self.submit("poll", cli, "get", "key", "playback")
+                if key == "transport" and self.transport_queue:
+                    self.command(*self.transport_queue.popleft())
+                if key == "command" and self.queued_start:
+                    item, self.queued_start = self.queued_start, None
+                    self.start_track(item)
             elif key == "favorite":
                 track_id, was_liked, track = self.like_target
                 if isinstance(value, bool):
@@ -765,7 +833,16 @@ class App:
             title_y + 1, 4, artists(item) + " · " + (item.get("album") or {}).get("name", ""), 3, width=w - 8
         )
         active = self.playback.get("is_playing", False)
-        self.put(title_y + 2, 4, "● ИГРАЕТ" if active else "Ⅱ ПАУЗА · Space продолжить", 2 if active else 5)
+        self.put(
+            title_y + 2,
+            4,
+            "◌ ЗАГРУЗКА"
+            if self.playback.get("is_loading")
+            else "● ИГРАЕТ"
+            if active
+            else "Ⅱ ПАУЗА · Space продолжить",
+            2 if active else 5,
+        )
         total = item.get("duration_ms") or 0
         ms = min(
             total,
@@ -928,7 +1005,7 @@ class App:
         self.put(
             y + (1 if height < 11 else 2),
             x,
-            "● ВОСПРОИЗВЕДЕНИЕ" if active else "Ⅱ ПАУЗА",
+            "◌ ЗАГРУЗКА" if self.playback.get("is_loading") else "● ВОСПРОИЗВЕДЕНИЕ" if active else "Ⅱ ПАУЗА",
             2 if active else 5,
             width=width,
         )
@@ -1025,7 +1102,11 @@ class App:
             self.hit(ty, tx, 1, len(text), "key", str(index))
             tx += len(text) + 1
         list_y = ty + 1
-        thumbs = bool(self.items and self.items[0][0] in ("playlist", "album")) and height >= 7
+        detailed_search = self.section.startswith("Поиск:")
+        thumbs = (
+            bool(self.items and (self.items[0][0] in ("playlist", "album") or detailed_search))
+            and height >= 7
+        )
         row_h = 3 if thumbs else 1
         rows = max(1, (y + height - 1 - list_y) // row_h)
         start = max(0, self.selected - rows + 1)
@@ -1080,6 +1161,14 @@ class App:
             )
             if thumbs:
                 self.put(yy + 1, tx, by, 6 if selected else 3, width=w - tx - 18)
+                if detailed_search and kind == "track":
+                    self.put(
+                        yy + 2,
+                        tx,
+                        (data.get("album") or {}).get("name", ""),
+                        6 if selected else 7,
+                        width=w - tx - 18,
+                    )
             else:
                 self.put(yy, int(w * 0.57), by, 6 if selected else 3, width=max(4, int(w * 0.27)))
             self.put(yy, w - 14, label, 6 if selected else 4)
@@ -1089,7 +1178,13 @@ class App:
     def load_thumbnail(self, kind, item):
         images = item.get("images") or (item.get("album") or {}).get("images") or []
         if images:
-            return cover(images[-1]["url"], 24, 24)
+            ready = cached_cover(image_url(images, 256))
+            if ready:
+                return [
+                    [ready[y * len(ready) // 24][x * len(ready[0]) // 24] for x in range(24)]
+                    for y in range(24)
+                ]
+            return cover(image_url(images, 24), 24, 24)
         return thumbnail(kind, item["id"])
 
     def render_layout(self, h, w):
@@ -1225,7 +1320,9 @@ class App:
         self.hits = []
         lines = [
             ("/ или F2", "Ввести поисковый запрос"),
-            ("Enter в поиске", "Найти музыку"),
+            ("Ввод в поиске", "Подсказки: обложка, трек, автор, альбом, время"),
+            ("↓ / Tab в поиске", "Перейти к результатам"),
+            ("Enter в поиске", "Найти музыку сразу"),
             ("Enter в списке", "Открыть плейлист / включить трек"),
             ("P", "Включить весь плейлист / альбом"),
             ("Tab", "Переключить поиск и список"),
@@ -1269,18 +1366,113 @@ class App:
         )
 
     def command(self, *args):
-        if "command" not in self.pending:
-            if not getattr(API, "local_controls", False):
-                self.notice = "Выполняю…"
-            self.submit("command", cli, *args)
+        if "transport" in self.pending:
+            self.transport_queue.append(args)
+            return
+        if not getattr(API, "local_controls", False):
+            self.notice = "Выполняю…"
+        self.submit("transport", cli, *args)
+
+    def start_track(self, item):
+        item = dict(item)
+        tracks = [track for kind, track in self.items if kind == "track" and len(track.get("id", "")) == 22]
+        index = next((i for i, track in enumerate(tracks) if track.get("id") == item.get("id")), None)
+        if index is not None:
+            first = max(0, index - 20) if len(tracks) > 100 else 0
+            item["_queue_uris"] = ["spotify:track:" + track["id"] for track in tracks[first : first + 100]]
+        self.notice = "Загружается: " + item.get("name", "трек")
+        self.playback = {
+            **self.playback,
+            "item": item,
+            "progress_ms": 0,
+            "is_playing": False,
+            "is_loading": True,
+        }
+        self.updated = time.monotonic()
+        self.track_cover(item)
+        if "command" in self.pending:
+            self.queued_start = item
+            if hasattr(API, "cancel_start"):
+                API.cancel_start()
+            return
+        self.submit("command", API.start, item)
 
     def track_cover(self, item):
         images = (item.get("album") or {}).get("images") or item.get("images") or []
         url = image_url(images, 256)
         if url != self.art_url:
-            self.art_url, self.art = url, []
-            if url:
+            self.art_url, self.art = url, cached_cover(url) or []
+            if url and not self.art:
                 self.submit("cover", lambda u=url: (u, cover(u, 256, 256)))
+
+    def prefetch_nearby(self):
+        # Load a bounded window while the user browses, before Enter/Next.
+        nearby = self.items[max(0, self.selected - 1) : self.selected + 5]
+        for kind, item in nearby:
+            if kind != "track":
+                continue
+            if hasattr(API, "remember_tracks"):
+                API.remember_tracks(item)
+            images = (item.get("album") or {}).get("images") or item.get("images") or []
+            url = image_url(images, 256)
+            if (
+                url
+                and url not in self.prefetched_covers
+                and sum(k.startswith("prefetch:") for k in self.pending) < 2
+            ):
+                self.prefetched_covers.add(url)
+                if len(self.prefetched_covers) > 128:
+                    self.prefetched_covers = {url}
+                self.submit("prefetch:" + url, cover, url, 256, 256)
+
+    def schedule_search(self):
+        query = self.query.strip()
+        self.section = "Поиск: " + query
+        candidates = dict(self.saved_tracks)
+        for entries in self.library_data.values():
+            for kind, item in entries:
+                if kind == "track" and item.get("id"):
+                    candidates[item["id"]] = item
+        words = query.casefold().split()
+        matches = []
+        seen = set()
+        if words:
+            for item in candidates.values():
+                text = " ".join(
+                    (item.get("name", ""), artists(item), (item.get("album") or {}).get("name", ""))
+                ).casefold()
+                if item.get("id") not in seen and all(word in text for word in words):
+                    matches.append(("track", item))
+                    seen.add(item.get("id"))
+                    if len(matches) >= 10:
+                        break
+        self.items = matches
+        self.selected = 0
+        self.notice = (
+            "Из библиотеки · ищу в Spotify…"
+            if matches
+            else "Подсказки по мере ввода · ↓ результаты · Enter поиск"
+        )
+        cached = self.search_cache.get(query)
+        if cached and time.monotonic() - cached[0] < 30:
+            self.events.put(("search", {"_query": query, "_results": cached[1]}, None))
+            self.search_due = 0
+        else:
+            self.search_due = time.monotonic() + 0.18 if query else 0
+
+    def dispatch_search(self):
+        query = self.query.strip()
+        if not query:
+            self.search_due = 0
+            return
+        if "search" in self.pending:
+            return
+        self.search_due = 0
+        self.submit("search", lambda q: {"_query": q, "_results": API.search(q)}, query)
+
+    def update_live_search(self):
+        if self.search_due and time.monotonic() >= self.search_due:
+            self.dispatch_search()
 
     def volume_wait_notice(self):
         if self.volume_dirty and volume_now() < self.volume_retry_until:
@@ -1398,12 +1590,17 @@ class App:
             elif k in ("\n", "\r", curses.KEY_ENTER):
                 if self.query.strip():
                     self.notice = "Поиск…"
-                    self.submit("search", cli, "search", self.query.strip())
+                    self.dispatch_search()
                     self.editing = False
+            elif k == curses.KEY_DOWN and self.items:
+                self.editing = False
+                self.focus_panel = "library"
             elif k in (curses.KEY_BACKSPACE, "\x7f", "\b"):
                 self.query = self.query[:-1]
+                self.schedule_search()
             elif isinstance(k, str) and k.isprintable() and len(self.query) < 180:
                 self.query += k
+                self.schedule_search()
             return
         if k in ("?", curses.KEY_F1):
             self.help = True
@@ -1434,8 +1631,7 @@ class App:
         elif k in ("\n", "\r", curses.KEY_ENTER) and self.items:
             kind, item = self.items[self.selected]
             if kind == "track":
-                self.notice = "Запускаю и проверяю трек…"
-                self.submit("command", API.start, item)
+                self.start_track(item)
             elif kind in ("playlist", "album", "artist"):
                 self.notice = "Загрузка треков…"
                 self.submit("open", open_context, kind, item["id"], item.get("name", "Треки"))
@@ -1498,7 +1694,9 @@ class App:
                 self.audio.enabled = (self.show_spectrum or self.fullscreen) and not (
                     self.help or self.layout_editor
                 )
-                if now - last_poll > 2:
+                self.prefetch_nearby()
+                self.update_live_search()
+                if now - last_poll > (0.1 if getattr(API, "local_controls", False) else 2):
                     self.submit("poll", cli, "get", "key", "playback")
                     last_poll = time.monotonic()
                 if now >= next_frame:
@@ -1514,6 +1712,7 @@ class App:
                     self.key(key)
                     if key != curses.KEY_MOUSE or self.mouse_changed:
                         dirty = True
+                        next_frame = 0
                 except curses.error:
                     pass
         finally:
@@ -1530,5 +1729,7 @@ class App:
             self.audio.close()
             self.pool.shutdown(wait=False, cancel_futures=True)
             self.transport_pool.shutdown(wait=False, cancel_futures=True)
+            self.state_pool.shutdown(wait=False, cancel_futures=True)
+            self.search_pool.shutdown(wait=False, cancel_futures=True)
             self.art_pool.shutdown(wait=False, cancel_futures=True)
             self.cover_pool.shutdown(wait=False, cancel_futures=True)

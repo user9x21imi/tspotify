@@ -82,6 +82,8 @@ def app(monkeypatch):
     value.playback = {"item": track, "device": {"volume_percent": 0}}
     value.test_calls = calls
     yield value
+    value.search_pool.shutdown(wait=True, cancel_futures=True)
+    value.state_pool.shutdown(wait=True, cancel_futures=True)
     value.transport_pool.shutdown(wait=True, cancel_futures=True)
     value.pool.shutdown(wait=True, cancel_futures=True)
     value.art_pool.shutdown(wait=True, cancel_futures=True)
@@ -822,3 +824,163 @@ def test_slow_track_start_does_not_block_local_volume(app, monkeypatch):
     finally:
         release.set()
         settle(app)
+
+
+def test_preloaded_cover_is_visible_without_background_job(app, monkeypatch):
+    image = [[(1, 2, 3)]]
+    monkeypatch.setattr(ui, "cached_cover", lambda *args: image)
+    app.track_cover({"album": {"images": [{"url": "https://i.scdn.co/image/preloaded"}]}})
+    assert app.art is image
+    assert "cover" not in app.pending
+
+
+def test_rapid_next_commands_are_not_dropped(app, monkeypatch):
+    import threading
+
+    first, release = threading.Event(), threading.Event()
+    calls = []
+
+    def control(command, value):
+        calls.append(command)
+        if len(calls) == 1:
+            first.set()
+            release.wait(2)
+        return ""
+
+    monkeypatch.setattr(ui.API, "control", control)
+    app.command("playback", "next")
+    assert first.wait(0.5)
+    for _ in range(3):
+        app.command("playback", "next")
+    release.set()
+    settle(app)
+    assert calls == ["next"] * 4
+
+
+def test_transport_works_while_track_confirmation_is_pending(app):
+    import threading
+
+    started, release = threading.Event(), threading.Event()
+
+    def start():
+        started.set()
+        release.wait(2)
+        return ""
+
+    app.submit("command", start)
+    assert started.wait(0.5)
+    try:
+        app.command("playback", "next")
+        deadline = time.monotonic() + 0.5
+        while not app.test_calls and time.monotonic() < deadline:
+            time.sleep(0.001)
+        assert ("control", ("next", None)) in app.test_calls
+    finally:
+        release.set()
+        settle(app)
+
+
+def test_selected_track_metadata_is_shown_before_slow_start_finishes(app, monkeypatch):
+    import threading
+
+    started, release = threading.Event(), threading.Event()
+
+    def slow_start(item):
+        started.set()
+        release.wait(2)
+        return ""
+
+    monkeypatch.setattr(ui.API, "start", slow_start)
+    selected = {"id": "new", "name": "Selected", "duration_ms": 180000}
+    app.start_track(selected)
+    try:
+        assert started.wait(0.5)
+        assert app.playback["item"]["id"] == "new"
+        assert app.playback["is_loading"]
+        assert not app.playback["is_playing"]
+    finally:
+        release.set()
+        settle(app)
+
+
+def test_search_suggests_after_typing_without_enter(app, monkeypatch):
+    now = [time.monotonic()]
+    monkeypatch.setattr(ui.time, "monotonic", lambda: now[0])
+    app.key("/")
+    for letter in "abc":
+        app.key(letter)
+        app.update_live_search()
+    assert not app.test_calls
+    now[0] += 0.2
+    app.update_live_search()
+    settle(app)
+    assert ("search", ("abc",)) in app.test_calls
+    assert app.editing
+    assert app.section == "Поиск: abc"
+    app.key(curses.KEY_DOWN)
+    assert not app.editing
+
+
+def test_old_search_reply_cannot_replace_new_query(app):
+    settle(app)
+    app.query = "new"
+    app.section = "Поиск: new"
+    app.items = [("track", {"id": "keep"})]
+    app.events.put(("search", {"_query": "old", "_results": {"tracks": [{"id": "stale"}]}}, None))
+    app.drain()
+    assert app.items[0][1]["id"] == "keep"
+    assert app.search_due
+
+
+def test_search_rows_include_thumbnail_author_album_and_duration(app):
+    app.section = "Поиск: example"
+    app.items = [
+        (
+            "track",
+            {
+                "id": "search-row",
+                "name": "Song",
+                "artists": [{"name": "Author"}],
+                "album": {"name": "Album"},
+                "duration_ms": 245000,
+            },
+        )
+    ]
+    app.render_library(25, 140, 15)
+    text = [value for _, _, value in app.s.calls]
+    assert all(value in text for value in ("Song", "Author", "Album", "4:05"))
+    assert any(hit[2] == 3 and hit[4] == "row" for hit in app.hits)
+    settle(app)
+
+
+def test_library_suggestions_are_immediate_before_network_search(app):
+    app.saved_tracks = {
+        "spotify:track:local": {
+            "id": "local",
+            "name": "Local Song",
+            "artists": [{"name": "Artist"}],
+            "album": {"name": "Album"},
+            "duration_ms": 100000,
+        }
+    }
+    app.query = "Local"
+    app.schedule_search()
+    assert app.items[0][1]["id"] == "local"
+    assert not app.test_calls
+    assert "search" not in app.pending
+
+
+def test_old_play_confirmation_never_labels_new_track_in_footer(app):
+    settle(app)
+    app.playback = {"item": {"id": "new", "name": "Current"}, "is_playing": True}
+    app.events.put(("command", "Воспроизводится: Old song", None))
+    app.drain()
+    assert "Old song" not in app.notice
+
+
+def test_confirmed_playback_clears_obsolete_reconnect_notice(app):
+    settle(app)
+    app.notice = "Переподключаю встроенный Spotify (1/2)…"
+    app.events.put(("poll", {"item": {"id": "playing"}, "is_playing": True}, None))
+    app.drain()
+    assert not app.notice

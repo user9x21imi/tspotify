@@ -1,6 +1,8 @@
 """Pooled Spotify requests, explicit failures, cached libraries and verified playback."""
 
 import json
+import concurrent.futures
+from collections import OrderedDict
 import math
 import threading
 import time
@@ -36,7 +38,7 @@ class Spotify:
         self.http = httpx.Client(
             http2=True,
             timeout=httpx.Timeout(12, connect=8),
-            limits=httpx.Limits(max_connections=4, max_keepalive_connections=4),
+            limits=httpx.Limits(max_connections=8, max_keepalive_connections=8),
         )
         self.rate_until = 0.0
         self.backend = None
@@ -50,6 +52,7 @@ class Spotify:
         self._volume_lock = threading.RLock()
         self._volume_revision = 0
         self._restore_gate = time.monotonic()
+        self._start_cancel = threading.Event()
         self.idle = True
         self.last_playback = {
             "item": self.resume_data.get("track"),
@@ -57,17 +60,90 @@ class Spotify:
             "progress_ms": self.resume_data.get("position_ms", 0),
             "device": {"name": "tspotify", "volume_percent": self.resume_data["volume"]},
         }
+        self._remote_future = None
+        self._remote_started = 0.0
+        self._remote_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        self._metadata_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+        self._metadata_jobs = {}
+        self._metadata_retry = {}
+        self._tracks = OrderedDict()
+        self._tracks_lock = threading.RLock()
         self._last_remote_poll = 0.0
         self._lock = threading.Lock()
         self.on_status = lambda message: None
         self.on_volume_retry = lambda target, seconds, applied: None
 
     def close(self):
+        self._remote_pool.shutdown(wait=False, cancel_futures=True)
+        self._metadata_pool.shutdown(wait=False, cancel_futures=True)
         self.http.close()
+
+    def remember_tracks(self, value):
+        if isinstance(value, list):
+            for entry in value:
+                self.remember_tracks(entry)
+        elif isinstance(value, dict):
+            if value.get("id") and (
+                value.get("type") == "track"
+                or "duration_ms" in value
+                or isinstance(value.get("duration"), dict)
+            ):
+                with self._tracks_lock:
+                    self._tracks[value["id"]] = value
+                    self._tracks.move_to_end(value["id"])
+                    while len(self._tracks) > 1024:
+                        self._tracks.popitem(last=False)
+            for key in ("items", "tracks", "track", "item"):
+                if key in value:
+                    self.remember_tracks(value[key])
+
+    def track_metadata(self, identity):
+        with self._tracks_lock:
+            known = self._tracks.get(identity)
+        if known:
+            return known
+        for key, job in list(self._metadata_jobs.items()):
+            if job.done():
+                try:
+                    result = job.result()
+                    if result:
+                        self.remember_tracks(result)
+                except (SpotifyError, httpx.HTTPError, RuntimeError) as error:
+                    self._metadata_retry[key] = time.monotonic() + 5
+                    self.on_status("Данные трека: " + str(error)[:120])
+                self._metadata_jobs.pop(key, None)
+        with self._tracks_lock:
+            known = self._tracks.get(identity)
+        if known:
+            return known
+        if (
+            identity not in self._metadata_jobs
+            and len(self._metadata_jobs) < 2
+            and time.monotonic() >= self._metadata_retry.get(identity, 0)
+        ):
+            self._metadata_jobs[identity] = self._metadata_pool.submit(
+                self.request, "GET", "tracks/" + quote(identity, safe="")
+            )
+        return {"id": identity, "name": "Загружаются данные трека…", "_metadata_pending": True}
 
     @property
     def local_controls(self):
         return bool(self.backend and not self.external and getattr(self.backend, "local_enabled", False))
+
+    def activate_output_volume(self):
+        if (
+            not self.local_controls
+            or self.current_volume <= 0
+            or getattr(self.backend, "_volume_active", False)
+        ):
+            return
+        with self._volume_lock:
+            self.backend.local_control("volume", self.current_volume)
+            self.backend.confirmed_volume = self.current_volume
+            self.backend._volume_active = True
+            if not getattr(self.backend, "_audio_output_ready", False):
+                self.backend.unmute_after_user_volume(self.current_volume)
+                self.backend._audio_output_ready = True
 
     @property
     def current_volume(self):
@@ -122,6 +198,8 @@ class Spotify:
                 time.sleep(seconds + 0.05)
                 return self.request(method, path, body, _retry=1)
             raise RateLimited(seconds)
+        if response.status_code in (502, 503, 504) and _retry == 0 and method in ("GET", "PUT"):
+            return self.request(method, path, body, _retry=1)
         if response.status_code == 401:
             raise auth.LoginRequired("Spotify запросил повторный вход: tspotify login")
         if response.status_code >= 400:
@@ -143,7 +221,9 @@ class Spotify:
         try:
             if not response.content.strip():
                 raise ValueError("empty response")
-            return response.json()
+            result = response.json()
+            self.remember_tracks(result)
+            return result
         except ValueError:
             if _retry == 0:
                 time.sleep(0.2)
@@ -181,22 +261,51 @@ class Spotify:
 
     def playback(self, force=False):
         saved = self.last_playback
+        remote_ready = None
+        observed_start = time.monotonic()
+        if self._remote_future is not None and self._remote_future.done():
+            try:
+                remote_ready = self._remote_future.result() or {}
+                observed_start = self._remote_started
+            except (SpotifyError, httpx.HTTPError):
+                remote_ready = {}
+            self._remote_future = None
         if (
             self.backend
             and getattr(self.backend, "observe_connect", False)
-            and (force or time.monotonic() - self._last_remote_poll > 4)
+            and (remote_ready is not None or force or time.monotonic() - self._last_remote_poll > 4)
         ):
             self._last_remote_poll = time.monotonic()
             try:
-                remote = self.request("GET", "me/player") or {}
+                if remote_ready is not None:
+                    remote = remote_ready
+                elif self.local_controls and not force:
+                    if self._remote_future is None:
+                        self._remote_started = time.monotonic()
+                        self._remote_future = self._remote_pool.submit(self.request, "GET", "me/player")
+                    remote = {}
+                else:
+                    remote = self.request("GET", "me/player") or {}
+                event = getattr(self.backend, "event", {})
+                if event.get("at", 0) > observed_start:
+                    remote = {}  # An older Web response cannot undo a newer native event.
                 device = remote.get("device") or {}
-                if remote.get("item") and device.get("id"):
-                    own = getattr(self.backend, "device_id", None)
+                own = getattr(self.backend, "device_id", None)
+                stale_own_device = (
+                    device.get("name") in ("tspotify", "spotify-player") and device.get("id") != own
+                )
+                if (
+                    remote.get("item")
+                    and device.get("id")
+                    and device.get("is_active", True)
+                    and not stale_own_device
+                ):
                     self.external = device["id"] != own
                     self.device_id = device["id"]
                     if not self.external:
                         remote["device"] = {**device, "volume_percent": self.current_volume}
-                    remote["_observed_at"] = time.monotonic()
+                    remote["_observed_at"] = observed_start
+                    remote["_observed_progress_at"] = time.monotonic()
                     remote["_observed_progress_ms"] = remote.get("progress_ms") or 0
                     if self.external or remote.get("is_playing"):
                         self.idle = False
@@ -225,8 +334,10 @@ class Spotify:
                     ):
                         self.idle = False
                     pending = value.pop("_pending_track_id", None)
+                    if not pending and (value.get("item") or {}).get("_metadata_pending"):
+                        pending = value["item"]["id"]
                     if pending:
-                        value["item"] = self.request("GET", "tracks/" + quote(pending, safe=""))
+                        value["item"] = self.track_metadata(pending)
                     old_item = self.last_playback.get("item") or {}
                     new_item = value.get("item") or {}
                     if old_item.get("id") == new_item.get("id") and not new_item.get("duration_ms"):
@@ -256,6 +367,8 @@ class Spotify:
                             **value,
                             "device": {**(value.get("device") or {}), "volume_percent": self._runtime_volume},
                         }
+                    if value.get("is_playing"):
+                        self.activate_output_volume()
                     self.last_playback = value
                     return value
             except (OSError, TimeoutError):
@@ -341,10 +454,16 @@ class Spotify:
             self.on_status("Движок остановился. Восстанавливаю соединение без звука…")
             self.recover_device(force=True)
 
+    def cancel_start(self):
+        self._start_cancel.set()
+
     def start(self, item, context_uri=None, position_ms=0):
+        cancel = threading.Event()
+        self._start_cancel = cancel
         volume_revision = self._volume_revision
         self.ensure_engine()
         item = dict(item)
+        self.remember_tracks(item)
         if not item.get("duration_ms") and isinstance(item.get("duration"), dict):
             item["duration_ms"] = (
                 item["duration"].get("secs", 0) * 1000 + item["duration"].get("nanos", 0) // 1000000
@@ -359,6 +478,8 @@ class Spotify:
             context_uri = None  # Artist contexts do not support a track offset.
         if not context_uri and album.get("id"):
             context_uri = "spotify:album:" + album["id"]
+        if context_uri:
+            item["_context_uri"] = context_uri
         body = {"context_uri": context_uri, "offset": {"uri": uri}} if context_uri else {"uris": [uri]}
         position_ms = max(0, min(int(position_ms), max(0, (item.get("duration_ms") or 86400000) - 1)))
         if position_ms:
@@ -368,38 +489,82 @@ class Spotify:
         if self.backend and not self.external:
             self.backend._events()
         started = time.monotonic()
-        for attempt in range(3):
-            try:
-                if self.backend and not self.external:
-                    self.backend._events()
-                started = time.monotonic()
-                self.request("PUT", "me/player/play?" + self.device_query(), body)
-                break
-            except SpotifyError as error:
-                restricted = error.status == 403 and "Restriction violated" in str(error)
-                if restricted and attempt < 2 and self.backend and not self.external:
-                    self.on_status("Spotify ещё не активировал устройство. Подключаю без звука…")
-                    self.request("PUT", "me/player", {"device_ids": [self.backend.device_id], "play": False})
-                    time.sleep(1)
-                    continue
-                if error.status != 404:
-                    raise
-                if attempt == 2:
-                    raise SpotifyError(
-                        "Устройство Spotify отключилось. Переподключение не подтвердилось; трек не запущен.",
-                        status=404,
-                    ) from None
-                if self.external and not self.backend_factory:
-                    raise SpotifyError(
-                        "Выбранное устройство Spotify отключилось. Откройте Spotify на нём и повторите запуск.",
-                        status=404,
-                    ) from None
-                if not self.backend and not self.backend_factory:
-                    raise
-                self.recover_device(force=attempt > 0)
-                time.sleep(1.5)  # Connect discovery may lag the local control socket.
+        if self.local_controls and getattr(self.backend, "local_load", False):
+            queue = item.get("_queue_uris") if getattr(self.backend, "local_queue", False) else None
+            if not queue and getattr(self.backend, "local_queue", False):
+                if context_uri:
+                    parts = context_uri.split(":")
+                    if (
+                        len(parts) == 3
+                        and parts[1] in ("album", "playlist")
+                        and len(parts[2]) == 22
+                        and parts[2].isalnum()
+                    ):
+                        try:
+                            context = json.loads(
+                                (paths.CACHE / (parts[1] + "-" + parts[2] + ".json")).read_text()
+                            )
+                            entries = [track_from_entry(entry) for entry in context.get("tracks", [])]
+                            entries = [entry for entry in entries if entry]
+                            index = next(
+                                (i for i, entry in enumerate(entries) if entry["id"] == track_id), None
+                            )
+                            if index is not None:
+                                first = max(0, index - 20) if len(entries) > 100 else 0
+                                queue = [
+                                    "spotify:track:" + entry["id"] for entry in entries[first : first + 100]
+                                ]
+                        except (OSError, ValueError, TypeError, AttributeError):
+                            pass
+                queue = queue or [uri]
+                item["_queue_uris"] = queue
+            if queue:
+                self.backend.load_track(uri, context_uri, position_ms, queue)
+            else:
+                self.backend.load_track(uri, context_uri, position_ms)
+            self.device_id = getattr(self.backend, "device_id", self.device_id)
+        else:
+            for attempt in range(3):
+                try:
+                    if self.backend and not self.external:
+                        self.backend._events()
+                    started = time.monotonic()
+                    self.request("PUT", "me/player/play?" + self.device_query(), body)
+                    break
+                except SpotifyError as error:
+                    restricted = error.status == 403 and "Restriction violated" in str(error)
+                    if restricted and attempt < 2 and self.backend and not self.external:
+                        self.on_status("Spotify ещё не активировал устройство. Подключаю без звука…")
+                        self.request(
+                            "PUT", "me/player", {"device_ids": [self.backend.device_id], "play": False}
+                        )
+                        time.sleep(1)
+                        continue
+                    if error.status != 404:
+                        raise
+                    if attempt == 2:
+                        raise SpotifyError(
+                            "Устройство Spotify отключилось. Переподключение не подтвердилось; трек не запущен.",
+                            status=404,
+                        ) from None
+                    if self.external and not self.backend_factory:
+                        raise SpotifyError(
+                            "Выбранное устройство Spotify отключилось. Откройте Spotify на нём и повторите запуск.",
+                            status=404,
+                        ) from None
+                    if not self.backend and not self.backend_factory:
+                        raise
+                    self.recover_device(force=attempt > 0)
+                    time.sleep(1.5)  # Connect discovery may lag the local control socket.
         if self.backend and not self.external:
-            self.backend.wait_playing(track_id, since=started, timeout=25)
+            self.backend.wait_playing(
+                track_id, since=started, timeout=25, cancelled=cancel.is_set, position_ms=position_ms
+            )
+            if cancel.is_set():
+                return ""
+            event = getattr(self.backend, "event", {})
+            if event.get("at", 0) >= started and event.get("track_id") not in (None, track_id):
+                return ""  # A phone or newer command already selected another track.
             self.backend._snapshot_time = 0
             self.last_playback = {
                 "item": item,
@@ -408,13 +573,7 @@ class Spotify:
                 "device": {"id": self.device_id, "name": "tspotify", "volume_percent": self.current_volume},
             }
             self.idle = False
-            if (
-                self.local_controls
-                and self.current_volume > 0
-                and not getattr(self.backend, "_audio_output_ready", False)
-            ):
-                self.backend.unmute_after_user_volume(self.current_volume)
-                self.backend._audio_output_ready = True
+            self.activate_output_volume()
             with self._volume_lock:
                 volume = getattr(self.backend, "preferred_volume", self.current_volume)
                 if (
@@ -462,6 +621,8 @@ class Spotify:
             return self.control(command, value, _retry=True)
 
     def _control(self, command, value=None):
+        if command in ("next", "previous", "pause", "play-pause"):
+            self.cancel_start()
         self.ensure_engine()
         if command in ("play", "play-pause") and self.idle and not self.external:
             snapshot = self.playback()
@@ -683,6 +844,7 @@ class Spotify:
                 value = json.loads(target.read_text(encoding="utf-8"))
                 if isinstance(value, dict) and isinstance(value.get("tracks"), list):
                     value["context_uri"] = f"spotify:{kind}:{item_id}"
+                    self.remember_tracks(value)
                     return value
         except (OSError, ValueError):
             pass

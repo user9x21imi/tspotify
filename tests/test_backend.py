@@ -225,15 +225,25 @@ def test_integrated_start_uses_reachable_ap_port_and_keeps_boot_silent(monkeypat
     )
     monkeypatch.setattr(backend, "_read", lambda: None)
     monkeypatch.setattr(backend, "_events", lambda: None)
-    monkeypatch.setattr(backend, "ready", lambda: True)
+    readiness = iter([False, True])
+    monkeypatch.setattr(backend, "ready", lambda: next(readiness, True))
     monkeypatch.setattr(backend, "request", lambda *args, **kw: {"protocol": 1})
     monkeypatch.setattr(backend, "local_control", lambda *args: calls.append(args))
     try:
         backend.start()
         config = (paths.BACKEND_CONFIG / "app.toml").read_text()
         assert "ap_port = 443" in config
+        assert "custom_queue = false" in config
         assert "volume = 0" in config
         assert calls == [("pause",), ("volume", 0)]
     finally:
         if backend.master is not None:
             os.close(backend.master)
+
+
+def test_start_never_takes_over_another_running_engine(monkeypatch):
+    backend = Backend()
+    monkeypatch.setattr(backend, "ready", lambda: True)
+    monkeypatch.setattr(backend, "local_control", lambda *a: pytest.fail("Must not change another engine"))
+    with pytest.raises(RuntimeError, match="уже занят"):
+        backend.start()
