@@ -3,7 +3,7 @@
         if command == "capabilities" {
             return Ok(serde_json::to_vec(&serde_json::json!({
                 "protocol": 1, "local_volume": true, "local_seek": true,
-                "local_transport": true, "local_load": true, "engine": "tspotify-librespot"
+                "local_transport": true, "local_load": true, "local_queue": true, "engine": "tspotify-librespot"
             }))?);
         }
         #[cfg(feature = "streaming")]
@@ -21,10 +21,17 @@
                     playing_track: Some(PlayingTrack::Uri(uri.to_owned())),
                     ..Default::default()
                 };
-                let request = match payload["context_uri"].as_str() {
+                let tracks: Vec<String> = payload["uris"].as_array().map(|entries| entries.iter().take(100)
+                    .filter_map(|entry| entry.as_str())
+                    .filter(|track| track.starts_with("spotify:track:") && track.len() == 36)
+                    .map(str::to_owned).collect()).unwrap_or_default();
+                let request = if !tracks.is_empty() {
+                    LoadRequest::from_tracks(tracks, options)
+                } else { match payload["context_uri"].as_str() {
                     Some(context) if context.starts_with("spotify:playlist:") || context.starts_with("spotify:album:") =>
                         LoadRequest::from_context_uri(context.to_owned(), options),
                     _ => LoadRequest::from_tracks(vec![uri.to_owned()], options),
+                }
                 };
                 spirc.activate()?;
                 spirc.load(request)?;
