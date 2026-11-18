@@ -15,3 +15,5 @@ credentials.json
 *.env
 legacy_app.py
 
+
+release/

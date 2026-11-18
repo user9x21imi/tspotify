@@ -56,6 +56,10 @@ def available(force=False):
 
 def install(tag):
     """Fetch a pinned release installer and validate its published checksum."""
+    from .managed import owner
+
+    if owner() == "ttools":
+        raise RuntimeError("Эта установка обновляется через ttools")
     if not version(tag):
         raise ValueError("Invalid release version")
     name = "install.ps1" if os.name == "nt" else "install.sh"
@@ -100,6 +104,12 @@ def install(tag):
 
 
 def offer(force=False):
+    from .managed import owner
+
+    if owner() == "ttools":
+        if force:
+            print("Обновления этой установки выполняет ttools.")
+        return False
     if not force and (not getattr(sys, "frozen", False) or not sys.stdin.isatty()):
         return False
     tag = available(force=force)

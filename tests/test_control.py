@@ -78,3 +78,34 @@ def test_desktop_shortcuts_match_the_requested_media_layout():
         "volume-down": (11,),
         "volume-up": (12,),
     }
+
+
+def test_system_media_bindings_are_restored_without_overwriting_new_user_shortcuts(monkeypatch):
+    from tspotify import paths
+
+    identity = ["mediacontrol", "playpausemedia", "Media controller", "Play/pause"]
+    media = shortcuts.MEDIA_KEYS["play-pause"][0]
+    owners = {media: identity}
+    bindings = {tuple(identity): [media, 1234]}
+    paths.private_json(paths.CONFIG / "global-shortcuts.json", {"enabled": True, "media_keys": True})
+
+    def call(method, *args):
+        if method == "action":
+            return repr((owners.get(int(args[0]), []),))
+        if method == "shortcut":
+            return repr((bindings.get(tuple(json.loads(args[0])), []),))
+        if method == "setForeignShortcut":
+            key, codes = tuple(json.loads(args[0])), json.loads(args[1])
+            bindings[key] = codes
+            for code in list(owners):
+                if tuple(owners[code]) == key:
+                    owners.pop(code)
+            owners.update({code: list(key) for code in codes})
+        return "()"
+
+    monkeypatch.setattr(shortcuts, "call", call)
+    shortcuts.redirect_media_keys()
+    assert bindings[tuple(identity)] == [1234]
+    shortcuts.restore_media_keys()
+    assert set(bindings[tuple(identity)]) == {media, 1234}
+    assert not (paths.CONFIG / "media-key-backup.json").exists()

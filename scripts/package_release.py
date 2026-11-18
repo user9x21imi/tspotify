@@ -5,13 +5,25 @@ import hashlib
 import shutil
 from pathlib import Path
 
+from tspotify.backend import engine_path
+
 parser = argparse.ArgumentParser()
 parser.add_argument("platform")
+parser.add_argument("--engine", help="explicit verified engine executable to bundle")
 args = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
 source = root / "dist/tspotify"
 if not source.is_dir():
     raise SystemExit("Build dist/tspotify with PyInstaller first")
+engine = Path(args.engine) if args.engine else engine_path(install=False)
+if engine is None or not engine.is_file():
+    raise SystemExit("A prepared streaming engine is required; run tspotify install-engine first")
+engine_dir = source / "engine"
+engine_dir.mkdir(exist_ok=True)
+shutil.copy2(engine, engine_dir / engine.name)
+(engine_dir / "SHA256SUMS.txt").write_text(
+    hashlib.sha256(engine.read_bytes()).hexdigest() + "  " + engine.name + "\n"
+)
 for name in ("LICENSE", "NOTICE", "README.md", "CHANGELOG.md"):
     shutil.copy2(root / name, source / name)
 shutil.copytree(root / "docs/licenses", source / "licenses", dirs_exist_ok=True)

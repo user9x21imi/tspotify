@@ -315,6 +315,9 @@ class App:
             changed = True
             self.pending.discard(key)
             if key == "hotkey":
+                if value == "quit":
+                    self.running = False
+                    continue
                 if value in ("volume-up", "volume-down", "mute"):
                     self.volume_key({"volume-up": "+", "volume-down": "-", "mute": "m"}[value])
                 else:
@@ -733,14 +736,14 @@ class App:
         )
         active = self.playback.get("is_playing", False)
         self.put(title_y + 2, 4, "● ИГРАЕТ" if active else "Ⅱ ПАУЗА · Space продолжить", 2 if active else 5)
-        total = item.get("duration_ms") or 1
+        total = item.get("duration_ms") or 0
         ms = min(
             total,
             (self.playback.get("progress_ms") or 0)
             + ((time.monotonic() - self.updated) * 1000 if active else 0),
         )
         width = w - 25
-        filled = int(width * ms / total)
+        filled = int(width * ms / total) if total else 0
         self.progress_area = (title_y + 3, 4, width)
         self.hit(title_y + 3, 4, 1, width, "seek", None)
         self.put(title_y + 3, 4, "━" * filled + "─" * (width - filled), 2)
@@ -916,13 +919,13 @@ class App:
         progress = (self.playback.get("progress_ms") or 0) + (
             (time.monotonic() - self.updated) * 1000 if active else 0
         )
-        total = item.get("duration_ms") or 1
+        total = item.get("duration_ms") or 0
         progress = min(progress, total)
         bar_w = max(8, width - 17)
         progress_y = y + height - (3 if height < 11 else 4)
         self.progress_area = (progress_y, x, bar_w)
         self.hit(progress_y, x, 1, bar_w, "seek", None)
-        filled = int(bar_w * progress / total)
+        filled = int(bar_w * progress / total) if total else 0
         self.put(progress_y, x, "━" * filled, 2)
         self.put(progress_y, x + filled, "─" * (bar_w - filled), 11)
         self.put(progress_y, x + bar_w + 2, f"{duration(progress)} / {duration(total)}", 4)
@@ -967,12 +970,12 @@ class App:
         if getattr(self, "progress_area", None):
             y, x, width = self.progress_area
             item = self.playback.get("item") or {}
-            total = item.get("duration_ms") or 1
+            total = item.get("duration_ms") or 0
             ms = self.playback.get("progress_ms") or 0
             if self.playback.get("is_playing"):
                 ms += (time.monotonic() - self.updated) * 1000
             ms = min(ms, total)
-            filled = int(width * ms / total)
+            filled = int(width * ms / total) if total else 0
             self.put(y, x, "━" * filled, 2)
             self.put(y, x + filled, "─" * (width - filled), 11)
             self.put(y, x + width + 2, f"{duration(ms)} / {duration(total)}", 4)
@@ -1004,6 +1007,11 @@ class App:
             label = {"track": "ТРЕК", "album": "АЛЬБОМ", "artist": "АРТИСТ", "playlist": "ПЛЕЙЛИСТ"}.get(
                 kind, kind
             )
+            if kind == "track":
+                milliseconds = data.get("duration_ms") or 0
+                if not milliseconds and isinstance(data.get("duration"), dict):
+                    milliseconds = data["duration"].get("secs", 0) * 1000
+                label = duration(milliseconds) if milliseconds else "--:--"
             if selected:
                 for dy in range(row_h):
                     self.put(yy + dy, 3, " " * (w - 6), 6)
@@ -1423,7 +1431,10 @@ class App:
             if not DEMO_MODE:
                 from .control import ControlServer
 
-                controls = ControlServer(lambda action: self.events.put(("hotkey", action, None)))
+                controls = ControlServer(
+                    lambda action: self.events.put(("hotkey", action, None)),
+                    engine_pid=getattr(getattr(API.backend, "process", None), "pid", None),
+                )
                 if controls.shortcut_error:
                     self.notice = "Системные F-клавиши: " + controls.shortcut_error
             # Raw mode delivers Ctrl+Q instead of consuming it as XON flow control.

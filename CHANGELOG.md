@@ -2,6 +2,12 @@
 
 ## 0.1.0
 
+- Route hardware Media Play/Pause/Next/Previous and volume keys to the running KDE client, restoring system bindings on exit.
+- Follow fresh phone/Connect selections without replaying the stored session or overwriting the external device target.
+- Prevent stale local events from replacing newer Connect state; unknown durations no longer fill the progress bar.
+- Display track durations in search and library lists.
+- Bundle the streaming engine in native archives; add headless status/stop/runtime checks and managed ttools update ownership.
+
 - Correct media mapping: F7 previous, F8 play/pause, F9 next, F10 mute, F11 quieter, F12 louder; migrates prior KDE bindings.
 - Debounced, paced volume writes discard unchanged boundary values and retry the latest target automatically after Spotify Retry-After.
 

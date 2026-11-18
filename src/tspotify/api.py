@@ -49,6 +49,7 @@ class Spotify:
         self._volume_until = 0.0
         self._volume_lock = threading.RLock()
         self._volume_revision = 0
+        self._restore_gate = time.monotonic()
         self.idle = True
         self.last_playback = {
             "item": self.resume_data.get("track"),
@@ -175,9 +176,31 @@ class Spotify:
         return match
 
     def playback(self, force=False):
-        if self.idle and not self.external and self.last_playback.get("item"):
+        saved = self.last_playback
+        if (
+            self.backend
+            and getattr(self.backend, "observe_connect", False)
+            and (force or time.monotonic() - self._last_remote_poll > 4)
+        ):
+            self._last_remote_poll = time.monotonic()
+            try:
+                remote = self.request("GET", "me/player") or {}
+                device = remote.get("device") or {}
+                if remote.get("item") and device.get("id"):
+                    own = getattr(self.backend, "device_id", None)
+                    self.external = device["id"] != own
+                    self.device_id = device["id"]
+                    remote["_observed_at"] = time.monotonic()
+                    remote["_observed_progress_ms"] = remote.get("progress_ms") or 0
+                    if self.external or remote.get("is_playing"):
+                        self.idle = False
+                        self.last_playback = remote
+                        saved = remote
+            except (SpotifyError, httpx.HTTPError):
+                pass
+        if self.idle and not self.external and not hasattr(self.backend, "playback") and saved.get("item"):
             return {
-                **self.last_playback,
+                **saved,
                 "is_playing": False,
                 "device": {"name": "tspotify", "volume_percent": self.current_volume},
             }
@@ -185,7 +208,33 @@ class Spotify:
             try:
                 value = self.backend.playback(self.last_playback)
                 if value:
+                    event = getattr(self.backend, "event", {})
+                    if (
+                        self.idle
+                        and event.get("at", 0) > self._restore_gate
+                        and (
+                            event.get("playing")
+                            or event.get("track_id") != (saved.get("item") or {}).get("id")
+                        )
+                    ):
+                        self.idle = False
+                    pending = value.pop("_pending_track_id", None)
+                    if pending:
+                        value["item"] = self.request("GET", "tracks/" + quote(pending, safe=""))
+                    old_item = self.last_playback.get("item") or {}
+                    new_item = value.get("item") or {}
+                    if old_item.get("id") == new_item.get("id") and not new_item.get("duration_ms"):
+                        value["item"] = {
+                            **old_item,
+                            **new_item,
+                            "duration_ms": old_item.get("duration_ms", 0),
+                        }
                     if self.idle:
+                        value = {
+                            **value,
+                            "item": saved.get("item") or value.get("item"),
+                            "progress_ms": saved.get("progress_ms", 0),
+                        }
                         value = {
                             **value,
                             "is_playing": False,
@@ -214,7 +263,7 @@ class Spotify:
         return self.last_playback
 
     def device_query(self):
-        if self.backend and getattr(self.backend, "device_id", None):
+        if not self.external and self.backend and getattr(self.backend, "device_id", None):
             self.device_id = self.backend.device_id
         if not self.device_id and self.backend:
             device = self.backend.playback({}).get("device") or {}
@@ -399,8 +448,11 @@ class Spotify:
         if command in ("play", "play-pause") and self.idle and not self.external:
             snapshot = self.playback()
             item = snapshot.get("item") or {}
-            if item.get("id"):
+            if item.get("id") and self.idle:
                 return self.start(item, position_ms=snapshot.get("progress_ms") or 0)
+            if item.get("id"):
+                # A phone/Connect event superseded the saved session during observation.
+                return self._control("pause" if snapshot.get("is_playing") else "play")
             raise SpotifyError("Выберите трек в библиотеке, чтобы начать воспроизведение")
         device = self.device_query()
         if command == "play-pause":

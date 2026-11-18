@@ -1,5 +1,6 @@
 """Optional KDE global F7-F12 bindings, active only while the client is running."""
 
+import ast
 import json
 import os
 from pathlib import Path
@@ -16,6 +17,69 @@ COMPONENTS = {
     "volume-down": (11,),
     "volume-up": (12,),
 }
+
+
+MEDIA_KEYS = {
+    "previous": (0x01000082,),
+    "play-pause": (0x01000080, 0x01000085, 0x01000086),
+    "next": (0x01000083,),
+    "mute": (0x01000071,),
+    "volume-down": (0x01000070,),
+    "volume-up": (0x01000072,),
+}
+
+
+def array_reply(reply):
+    return list(ast.literal_eval(reply.replace("@as ", "").replace("@ai ", ""))[0])
+
+
+def media_enabled():
+    try:
+        return json.loads((paths.CONFIG / "global-shortcuts.json").read_text()).get("media_keys", False)
+    except (OSError, ValueError):
+        return False
+
+
+def redirect_media_keys():
+    backup = paths.CONFIG / "media-key-backup.json"
+    saved = json.loads(backup.read_text()) if backup.exists() else []
+    codes = {code for keys in MEDIA_KEYS.values() for code in keys}
+    owners = {}
+    for code in codes:
+        identity = array_reply(call("action", str(code)))
+        if not identity or identity[0].startswith("tspotify-"):
+            continue
+        if identity[0] not in ("mediacontrol", "kmix"):
+            raise RuntimeError("Медиаклавиша занята пользовательским сочетанием: " + identity[0])
+        owners[tuple(identity)] = array_reply(call("shortcut", json.dumps(identity)))
+    for identity, keys in owners.items():
+        if not any(entry["identity"][:2] == list(identity[:2]) for entry in saved):
+            saved.append({"identity": list(identity), "keys": keys})
+    # Persist before modifying KDE so a crashed session can restore the defaults.
+    paths.private_json(backup, saved)
+    for identity, keys in owners.items():
+        call(
+            "setForeignShortcut", json.dumps(identity), json.dumps([key for key in keys if key not in codes])
+        )
+
+
+def restore_media_keys():
+    backup = paths.CONFIG / "media-key-backup.json"
+    if not backup.exists():
+        return
+    saved = json.loads(backup.read_text())
+    for entry in saved:
+        identity = entry["identity"]
+        keys = array_reply(call("shortcut", json.dumps(identity)))
+        for code in entry["keys"]:
+            if code not in {value for codes in MEDIA_KEYS.values() for value in codes}:
+                continue
+            owner = array_reply(call("action", str(code)))
+            if not owner or owner[:2] == identity[:2]:
+                if code not in keys:
+                    keys.append(code)
+        call("setForeignShortcut", json.dumps(identity), json.dumps(keys))
+    backup.unlink()
 
 
 def call(method, *args):
@@ -51,6 +115,18 @@ def enabled():
 
 
 def set_active(active):
+    try:
+        return _set_active(active)
+    except (OSError, RuntimeError, ValueError):
+        if active and (paths.CONFIG / "media-key-backup.json").exists():
+            try:
+                _set_active(False)
+            except (OSError, RuntimeError, ValueError):
+                pass  # Keep the backup for recovery on the next clean shutdown.
+        raise
+
+
+def _set_active(active):
     if not shutil.which("gdbus"):
         return False
     if active:
@@ -65,6 +141,8 @@ def set_active(active):
                 )
                 if not available and not owned:
                     raise RuntimeError(f"F{number} уже используется другим системным сочетанием")
+    if active and media_enabled():
+        redirect_media_keys()
     if active:
         # Remove our former F7/F9/F11 and F8/F10/F12 volume groups before migration.
         for action in COMPONENTS:
@@ -76,8 +154,12 @@ def set_active(active):
         if active:
             call("doRegister", identity)
         keys = [0x01000030 + number - 1 for number in functions] if active else []
+        if active and media_enabled():
+            keys.extend(MEDIA_KEYS[action])
         # KGlobalAccel: SetPresent=2, NoAutoloading=4. Never steal conflicts.
         call("setShortcut", identity, json.dumps(keys), "6")
+    if not active:
+        restore_media_keys()
     return True
 
 
@@ -118,7 +200,7 @@ def install(remove=False):
         subprocess.run(
             [builder], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15, check=True
         )
-    paths.private_json(paths.CONFIG / "global-shortcuts.json", {"enabled": True})
+    paths.private_json(paths.CONFIG / "global-shortcuts.json", {"enabled": True, "media_keys": True})
     # Existing older processes have no control endpoint: register on next startup.
     try:
         from .control import ACTIONS

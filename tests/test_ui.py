@@ -735,3 +735,23 @@ def test_opposite_presses_cancel_before_any_http_request(app, monkeypatch):
     now[0] += 1
     app.drain()
     assert app.volume == 40 and not app.test_calls
+
+
+def test_unknown_duration_never_flashes_a_full_progress_bar(app):
+    app.playback = {"item": {"id": "loading", "name": "Loading"}, "progress_ms": 50000, "is_playing": True}
+    app.progress_area = (5, 4, 40)
+    app.animate()
+    bars = [text for y, x, text in app.s.calls if y == 5 and x == 4]
+    assert not any("━" in text for text in bars)
+    assert any("─" * 40 == text for text in bars)
+
+
+def test_search_results_display_each_track_duration(app):
+    app.items = [
+        ("track", {"id": "a", "name": "Short", "duration_ms": 183000}),
+        ("track", {"id": "b", "name": "Long", "duration": {"secs": 605}}),
+    ]
+    app.render_library(25, 140, 15)
+    texts = [text for _, _, text in app.s.calls]
+    assert "3:03" in texts
+    assert "10:05" in texts

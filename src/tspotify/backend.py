@@ -83,6 +83,10 @@ def engine_path(install=True):
             raise RuntimeError("TSPOTIFY_ENGINE не указывает на исполняемый файл")
         return value
     name = "spotify_player.exe" if os.name == "nt" else "spotify_player"
+    if getattr(sys, "frozen", False):
+        bundled = Path(sys.executable).parent / "engine" / name
+        if bundled.is_file():
+            return bundled
     target = paths.DATA / "bin" / name
     if target.exists():
         return target
@@ -141,6 +145,7 @@ class Backend:
         self.authorization_error = None
         self._authorization_started = 0.0
         self.reader_thread = None
+        self.observe_connect = True
         self.log_started = 0
         self.log_path = None
 
@@ -361,12 +366,21 @@ audio_cache = true
             match = matches[-1]
             signature = text[text.rfind("\n", 0, match.start()) + 1 : match.end()]
             if signature != self.event.get("signature"):
+                stamp = signature.split(" ", 1)[0]
+                age = 0
+                try:
+                    timestamp = datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+                    if timestamp < self.log_started:
+                        return
+                    age = max(0, time.time() - timestamp)
+                except ValueError:
+                    pass
                 self.event = {
                     "signature": signature,
                     "track_id": match[2],
                     "playing": match[1] == "Playing",
                     "position": int(match[3]),
-                    "at": time.monotonic(),
+                    "at": time.monotonic() - age,
                 }
         failures = list(re.finditer(r"unable to load track.*?spotify:track:([A-Za-z0-9]+)", text, re.I))
         if failures:
@@ -406,11 +420,24 @@ audio_cache = true
             except (OSError, TimeoutError):
                 pass
         result = dict(self._base or fallback)
+        # A recently observed Connect selection wins over an older local event/cache.
+        # Observation must never make us send the previous track back to Spotify.
+        if fallback.get("_observed_at", 0) > self.event.get("at", 0):
+            observed = dict(fallback)
+            if observed.get("is_playing"):
+                elapsed = max(0, time.monotonic() - observed["_observed_at"])
+                observed["progress_ms"] = (
+                    observed.get("_observed_progress_ms", observed.get("progress_ms", 0)) + elapsed * 1000
+                )
+            return observed
         if self.event and (fallback.get("item") or {}).get("id") == self.event.get("track_id"):
             base_item = self._base.get("item") or {}
             if base_item.get("id") != self.event.get("track_id") or not base_item.get("album"):
                 result = dict(fallback)
-        if self.event and (result.get("item") or {}).get("id") == self.event.get("track_id"):
+        if self.event and (result.get("item") or {}).get("id") != self.event.get("track_id"):
+            result["item"] = None
+            result["_pending_track_id"] = self.event["track_id"]
+        if self.event:
             elapsed = time.monotonic() - self.event["at"] if self.event["playing"] else 0
             result.update(
                 is_playing=self.event["playing"], progress_ms=self.event["position"] + elapsed * 1000

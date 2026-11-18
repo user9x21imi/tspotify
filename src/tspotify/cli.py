@@ -3,11 +3,13 @@
 import argparse
 import contextlib
 import locale
+import json
 import os
 import platform
 import shutil
 import signal
 import sys
+import time
 import webbrowser
 from urllib.parse import urlsplit
 import httpx
@@ -115,6 +117,10 @@ def parser():
     control_parser.add_argument(
         "action", choices=("previous", "play-pause", "next", "mute", "volume-down", "volume-up")
     )
+    stop_parser = sub.add_parser("stop", help="save session, exit normally and wait for the owned engine")
+    stop_parser.add_argument("--timeout", type=float, default=15)
+    sub.add_parser("verify-runtime", help="headless dependency check without OAuth, network or audio")
+    sub.add_parser("status", help="report running instance status without exposing control credentials")
     sub.add_parser("update", help="check and install a release update after confirmation")
     sub.add_parser("doctor", help="show diagnostics without printing tokens")
     sub.add_parser("devices", help="list available Spotify Connect devices")
@@ -124,6 +130,39 @@ def parser():
 
 def run(args):
     paths.prepare()
+    if args.command == "stop":
+        from .control import stop_client
+
+        print(json.dumps(stop_client(timeout=max(0.1, args.timeout))))
+        return
+    if args.command == "status":
+        from .control import send
+
+        try:
+            print(json.dumps({"running": True, **send("status")}))
+        except RuntimeError:
+            print(json.dumps({"running": False}))
+        return
+    if args.command == "verify-runtime":
+        import curses
+        import numpy
+        import PIL
+        import qrcode
+
+        print(
+            json.dumps(
+                {
+                    "ok": True,
+                    "version": __version__,
+                    "platform": platform.system(),
+                    "numpy": numpy.__version__,
+                    "pillow": PIL.__version__,
+                    "curses": bool(curses),
+                    "qrcode": bool(qrcode),
+                }
+            )
+        )
+        return
     if args.command == "install-shortcuts":
         from .shortcuts import install
 
@@ -212,6 +251,7 @@ def run(args):
                         api.request("PUT", "me/player/pause?" + api.device_query())
                 except SpotifyError:
                     pass
+            api._restore_gate = time.monotonic()
             # Import curses only for the UI: doctor, installation and OAuth work without a TTY.
             import curses
             from . import ui
@@ -253,7 +293,13 @@ def main(argv=None):
             sig = getattr(signal, name)
             previous[sig] = signal.signal(sig, interrupted)
     try:
-        run(args)
+        if args.command is None:
+            from .managed import runtime_lock
+
+            with runtime_lock():
+                run(args)
+        else:
+            run(args)
     except KeyboardInterrupt:
         print("\ntspotify закрыт.")
     except (RuntimeError, OSError, ValueError, httpx.HTTPError) as error:
