@@ -1,0 +1,38 @@
+name: Native local playback engine
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['engine/**', 'scripts/prepare_native_engine.py', '.github/workflows/engine.yml']
+permissions:
+  contents: read
+jobs:
+  engine-linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Audio build prerequisites
+        run: sudo apt-get update -qq && sudo apt-get install -y libasound2-dev libssl-dev pkg-config
+      - name: Prepare verified source and local-control patch
+        run: python scripts/prepare_native_engine.py engine-build
+      - name: Compile standalone streaming engine
+        working-directory: engine-build
+        env:
+          CARGO_PROFILE_RELEASE_LTO: 'false'
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '16'
+          CARGO_PROFILE_RELEASE_DEBUG: '0'
+        run: cargo build --locked --release -p spotify_player --no-default-features --features rodio-backend,rustls-tls -j 3
+      - name: Verify and checksum (no account or audio)
+        run: |
+          mkdir -p engine-artifact
+          cp engine-build/target/release/spotify_player engine-artifact/spotify_player
+          engine-artifact/spotify_player --version
+          sha256sum engine-artifact/spotify_player > engine-artifact/engine.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tspotify-local-engine-linux-x86_64
+          path: engine-artifact/*
