@@ -984,3 +984,30 @@ def test_confirmed_playback_clears_obsolete_reconnect_notice(app):
     app.events.put(("poll", {"item": {"id": "playing"}, "is_playing": True}, None))
     app.drain()
     assert not app.notice
+
+
+def test_remote_search_enriches_local_card_without_moving_selection(app):
+    settle(app)
+    app.query = "Song"
+    app.section = "Поиск: Song"
+    app.items = [("track", {"id": "a", "name": "Song A"}), ("track", {"id": "b", "name": "Song B"})]
+    app.selected = 1
+    app.thumbnails["track:b"] = []
+    album = {"name": "Album B", "images": [{"url": "https://i.scdn.co/image/search-b"}]}
+    app.events.put(
+        (
+            "search",
+            {
+                "_query": "Song",
+                "_results": {
+                    "tracks": [{"id": "b", "name": "Song B", "album": album, "duration_ms": 120000}]
+                },
+            },
+            None,
+        )
+    )
+    app.drain()
+    assert app.selected == 1
+    assert len(app.items) == 2
+    assert app.items[1][1]["album"] == album
+    assert "track:b" not in app.thumbnails

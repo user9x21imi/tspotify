@@ -518,6 +518,7 @@ class App:
                 self.section = "Поиск: " + self.query
                 self.items = list(old_items)
                 seen = {(kind, item.get("id")) for kind, item in self.items}
+                indexes = {(kind, item.get("id")): i for i, (kind, item) in enumerate(self.items)}
                 for kind, name in [
                     ("track", "tracks"),
                     ("album", "albums"),
@@ -525,9 +526,21 @@ class App:
                     ("playlist", "playlists"),
                 ]:
                     for item in (value or {}).get(name, []):
-                        if item and (kind, item.get("id")) not in seen:
+                        if not item:
+                            continue
+                        identity = (kind, item.get("id"))
+                        if identity in indexes:
+                            index = indexes[identity]
+                            self.items[index] = (kind, {**self.items[index][1], **item})
+                        elif identity not in seen:
+                            indexes[identity] = len(self.items)
                             self.items.append((kind, item))
-                            seen.add((kind, item.get("id")))
+                            seen.add(identity)
+                        thumb_key = kind + ":" + item.get("id", "")
+                        if self.thumbnails.get(thumb_key) == [] and (
+                            item.get("images") or (item.get("album") or {}).get("images")
+                        ):
+                            self.thumbnails.pop(thumb_key, None)
                 self.selected = next(
                     (i for i, (_, item) in enumerate(self.items) if item.get("id") == selected_id), 0
                 )
