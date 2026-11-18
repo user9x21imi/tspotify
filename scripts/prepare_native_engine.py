@@ -59,12 +59,12 @@ def prepare(destination, archive=None):
     assert text.count(anchor) == 1
     implementation.write_text(text.replace(anchor, anchor + patch, 1))
     cargo = crate / "Cargo.toml"
-    cargo.write_text(cargo.read_text().replace('version = "0.25.2"', 'version = "0.25.2+tspotify.1"', 1))
+    cargo.write_text(cargo.read_text().replace('version = "0.25.2"', 'version = "0.25.2+tspotify.2"', 1))
     lock = destination / "Cargo.lock"
     old = 'name = "spotify_player"\nversion = "0.25.2"'
     assert old in lock.read_text()
     lock.write_text(
-        lock.read_text().replace(old, 'name = "spotify_player"\nversion = "0.25.2+tspotify.1"', 1)
+        lock.read_text().replace(old, 'name = "spotify_player"\nversion = "0.25.2+tspotify.2"', 1)
     )
     return destination
 
