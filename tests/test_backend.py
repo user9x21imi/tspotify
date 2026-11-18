@@ -1,4 +1,5 @@
 import io
+import os
 import tarfile
 import time
 import zipfile
@@ -210,3 +211,29 @@ def test_zero_volume_keeps_engine_system_stream_muted(monkeypatch):
     monkeypatch.setattr("tspotify.backend.subprocess.run", lambda args, **kw: calls.append(args))
     Backend().unmute_after_user_volume(0)
     assert calls[-1] == ["pactl", "set-sink-input-mute", "42", "1"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX PTY startup harness")
+def test_integrated_start_uses_reachable_ap_port_and_keeps_boot_silent(monkeypatch):
+    from tspotify import backend as module
+
+    backend = Backend(muted=True)
+    calls = []
+    monkeypatch.setattr(module, "engine_path", lambda: "/fake/spotify_player")
+    monkeypatch.setattr(
+        module.subprocess, "Popen", lambda *args, **kwargs: SimpleNamespace(poll=lambda: None)
+    )
+    monkeypatch.setattr(backend, "_read", lambda: None)
+    monkeypatch.setattr(backend, "_events", lambda: None)
+    monkeypatch.setattr(backend, "ready", lambda: True)
+    monkeypatch.setattr(backend, "request", lambda *args, **kw: {"protocol": 1})
+    monkeypatch.setattr(backend, "local_control", lambda *args: calls.append(args))
+    try:
+        backend.start()
+        config = (paths.BACKEND_CONFIG / "app.toml").read_text()
+        assert "ap_port = 443" in config
+        assert "volume = 0" in config
+        assert calls == [("pause",), ("volume", 0)]
+    finally:
+        if backend.master is not None:
+            os.close(backend.master)

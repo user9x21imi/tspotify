@@ -2,6 +2,8 @@
 
 ## 0.1.0
 
+- Use Spotify access-point port 443 instead of hanging on blocked port 4070; network startup timeouts no longer incorrectly request another login.
+
 - Keep the preferred volume separate from the engine's temporary boot mute; save volume at each user adjustment.
 - Use the patched native engine's local IPC for volume, seek and transport; bypass Web API rate limits for integrated playback.
 - Separate transport workers keep volume responsive while a track loads.

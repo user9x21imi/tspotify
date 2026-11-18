@@ -207,6 +207,7 @@ class Backend:
         config = f'''client_id = "d420a117a32841c2b3474932e49fb54b"
 login_redirect_uri = "http://127.0.0.1:8989/login"
 client_port = {paths.PORT}
+ap_port = 443
 app_refresh_duration_in_ms = 1000
 playback_refresh_duration_in_ms = 0
 enable_streaming = "{"Never" if self.external else "Always"}"
@@ -273,7 +274,9 @@ audio_cache = true
                 deadline = max(deadline, self._authorization_started + 180)
             if time.monotonic() > deadline:
                 self.close()
-                raise RuntimeError("Движок Spotify не запустился. Проверьте вход: tspotify login")
+                raise RuntimeError(
+                    "Встроенный плеер не подключился к Spotify за 75 секунд. Проверьте доступ к сети; сохранённый вход не сброшен."
+                )
             if self.process and self.process.poll() is not None:
                 raise RuntimeError("Spotify engine завершился при запуске. Выполните tspotify doctor")
             time.sleep(0.15)
