@@ -57,14 +57,22 @@ def prepare(destination, archive=None):
     anchor = "impl AppClient {\n"
     patch = (Path(__file__).resolve().parents[1] / "engine/local_control.rs").read_text()
     assert text.count(anchor) == 1
-    implementation.write_text(text.replace(anchor, anchor + patch, 1))
+    text = text.replace(anchor, anchor + patch, 1)
+    start = text.index("    pub fn initialize_playback(")
+    end = text.index("    /// Create a new client session", start)
+    text = (
+        text[:start]
+        + "    pub fn initialize_playback(&self, _state: &SharedState, _resume: bool) {\n        // tspotify owns activation. Never transfer old Web API state behind its back.\n    }\n"
+        + text[end:]
+    )
+    implementation.write_text(text)
     cargo = crate / "Cargo.toml"
-    cargo.write_text(cargo.read_text().replace('version = "0.25.2"', 'version = "0.25.2+tspotify.3"', 1))
+    cargo.write_text(cargo.read_text().replace('version = "0.25.2"', 'version = "0.25.2+tspotify.4"', 1))
     lock = destination / "Cargo.lock"
     old = 'name = "spotify_player"\nversion = "0.25.2"'
     assert old in lock.read_text()
     lock.write_text(
-        lock.read_text().replace(old, 'name = "spotify_player"\nversion = "0.25.2+tspotify.3"', 1)
+        lock.read_text().replace(old, 'name = "spotify_player"\nversion = "0.25.2+tspotify.4"', 1)
     )
     return destination
 
