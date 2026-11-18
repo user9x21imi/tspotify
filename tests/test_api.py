@@ -522,3 +522,18 @@ def test_fractional_retry_after_rounds_up_and_cannot_shorten_existing_backoff(ap
     with pytest.raises(RateLimited):
         api.request("PUT", "me/player/volume")
     assert api.rate_until == until
+
+
+def test_native_volume_does_not_call_web_api_even_during_rate_limit(api):
+    calls = []
+    api.rate_until = time.monotonic() + 60
+    api.backend = SimpleNamespace(
+        local_enabled=True,
+        local_control=lambda *args: calls.append(args),
+        unmute_after_user_volume=lambda _: None,
+    )
+    api.request = lambda *args: pytest.fail("Native volume must not use Web API")
+    assert api.control("volume", 75) == "Громкость: 75%"
+    assert calls == [("volume", 75)]
+    assert api.current_volume == 75
+    assert api.resume_data["volume"] == 75

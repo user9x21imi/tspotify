@@ -2,6 +2,11 @@
 
 ## 0.1.0
 
+- Keep the preferred volume separate from the engine's temporary boot mute; save volume at each user adjustment.
+- Use the patched native engine's local IPC for volume, seek and transport; bypass Web API rate limits for integrated playback.
+- Separate transport workers keep volume responsive while a track loads.
+- Preserve a continuous progress clock and reject poll responses superseded by transport commands.
+
 - Route hardware Media Play/Pause/Next/Previous and volume keys to the running KDE client, restoring system bindings on exit.
 - Follow fresh phone/Connect selections without replaying the stored session or overwriting the external device target.
 - Prevent stale local events from replacing newer Connect state; unknown durations no longer fill the progress bar.

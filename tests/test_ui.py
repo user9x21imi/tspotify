@@ -82,6 +82,7 @@ def app(monkeypatch):
     value.playback = {"item": track, "device": {"volume_percent": 0}}
     value.test_calls = calls
     yield value
+    value.transport_pool.shutdown(wait=True, cancel_futures=True)
     value.pool.shutdown(wait=True, cancel_futures=True)
     value.art_pool.shutdown(wait=True, cancel_futures=True)
     value.cover_pool.shutdown(wait=True, cancel_futures=True)
@@ -755,3 +756,69 @@ def test_search_results_display_each_track_duration(app):
     texts = [text for _, _, text in app.s.calls]
     assert "3:03" in texts
     assert "10:05" in texts
+
+
+def test_local_volume_bypasses_network_backoff_and_is_saved_at_keypress(app, monkeypatch):
+    saved = []
+    monkeypatch.setattr(ui.API, "local_controls", True, raising=False)
+    monkeypatch.setattr(ui.API, "rate_until", time.monotonic() + 60, raising=False)
+    monkeypatch.setattr(ui.API, "save_session", lambda **kw: saved.append(kw), raising=False)
+    app.volume = app.volume_applied = 70
+    app.set_volume(75)
+    assert saved[-1] == {"volume": 75}
+    assert app.send_volume()
+    settle(app)
+    assert app.volume_applied == 75
+
+
+def test_local_boot_zero_cannot_be_checkpointed_as_user_preference(app, monkeypatch):
+    app.volume = app.volume_applied = 70
+    monkeypatch.setattr(ui.API, "external", False, raising=False)
+    app.events.put(("poll", {"device": {"volume_percent": 0}}, None))
+    app.drain()
+    assert app.volume == 70
+
+
+def test_poll_does_not_move_playing_progress_backwards(app, monkeypatch):
+    now = time.monotonic()
+    app.updated = now - 2
+    app.playback = {"item": {"id": "same"}, "progress_ms": 20000, "is_playing": True}
+    app.events.put(("poll", {"item": {"id": "same"}, "progress_ms": 21300, "is_playing": True}, None))
+    app.drain()
+    assert app.playback["progress_ms"] >= 22000
+
+
+def test_poll_started_before_transport_action_cannot_roll_back_progress(app):
+    app.transport_revision = 4
+    app.playback = {"item": {"id": "same"}, "progress_ms": 95000, "is_playing": True}
+    app.events.put(
+        ("poll", {"item": {"id": "same"}, "progress_ms": 10000, "is_playing": True, "_ui_revision": 3}, None)
+    )
+    app.drain()
+    assert app.playback["progress_ms"] == 95000
+
+
+def test_slow_track_start_does_not_block_local_volume(app, monkeypatch):
+    import threading
+
+    started, release = threading.Event(), threading.Event()
+
+    def slow_start():
+        started.set()
+        release.wait(2)
+        return ""
+
+    monkeypatch.setattr(ui.API, "local_controls", True, raising=False)
+    app.submit("command", slow_start)
+    assert started.wait(0.5)
+    try:
+        app.set_volume(75)
+        assert app.send_volume()
+        deadline = time.monotonic() + 0.5
+        while app.volume_applied != 75 and time.monotonic() < deadline:
+            app.drain()
+            time.sleep(0.001)
+        assert app.volume_applied == 75
+    finally:
+        release.set()
+        settle(app)

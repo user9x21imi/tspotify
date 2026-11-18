@@ -66,6 +66,10 @@ class Spotify:
         self.http.close()
 
     @property
+    def local_controls(self):
+        return bool(self.backend and not self.external and getattr(self.backend, "local_enabled", False))
+
+    @property
     def current_volume(self):
         if self._runtime_volume is not None:
             return self._runtime_volume
@@ -190,6 +194,8 @@ class Spotify:
                     own = getattr(self.backend, "device_id", None)
                     self.external = device["id"] != own
                     self.device_id = device["id"]
+                    if not self.external:
+                        remote["device"] = {**device, "volume_percent": self.current_volume}
                     remote["_observed_at"] = time.monotonic()
                     remote["_observed_progress_ms"] = remote.get("progress_ms") or 0
                     if self.external or remote.get("is_playing"):
@@ -239,6 +245,11 @@ class Spotify:
                             **value,
                             "is_playing": False,
                             "device": {**(value.get("device") or {}), "volume_percent": self.current_volume},
+                        }
+                    if not self.external:
+                        value["device"] = {
+                            **(value.get("device") or {}),
+                            "volume_percent": self.current_volume,
                         }
                     if self._runtime_volume is not None and time.monotonic() < self._volume_until:
                         value = {
@@ -397,6 +408,13 @@ class Spotify:
                 "device": {"id": self.device_id, "name": "tspotify", "volume_percent": self.current_volume},
             }
             self.idle = False
+            if (
+                self.local_controls
+                and self.current_volume > 0
+                and not getattr(self.backend, "_audio_output_ready", False)
+            ):
+                self.backend.unmute_after_user_volume(self.current_volume)
+                self.backend._audio_output_ready = True
             with self._volume_lock:
                 volume = getattr(self.backend, "preferred_volume", self.current_volume)
                 if (
@@ -454,13 +472,18 @@ class Spotify:
                 # A phone/Connect event superseded the saved session during observation.
                 return self._control("pause" if snapshot.get("is_playing") else "play")
             raise SpotifyError("Выберите трек в библиотеке, чтобы начать воспроизведение")
-        device = self.device_query()
+        local = self.local_controls
+        device = "" if local else self.device_query()
         if command == "play-pause":
-            command = "pause" if self.playback().get("is_playing") else "play"
+            snapshot = self.backend.playback(self.last_playback) if local else self.playback()
+            command = "pause" if snapshot.get("is_playing") else "play"
         if command == "volume":
             self._volume_revision += 1
             value = max(0, min(100, int(value)))
-            self.request("PUT", f"me/player/volume?volume_percent={value}&{device}")
+            if local:
+                self.backend.local_control("volume", value)
+            else:
+                self.request("PUT", f"me/player/volume?volume_percent={value}&{device}")
             if self.backend:
                 self.backend.preferred_volume = value
                 self.backend.confirmed_volume = value
@@ -468,18 +491,41 @@ class Spotify:
                 self.backend._snapshot_time = 0
                 if value > 0:
                     self.backend.muted = False
-                self.backend.unmute_after_user_volume(value)
+                if not local:
+                    self.backend.unmute_after_user_volume(value)
+                elif value > 0 and not getattr(self.backend, "_audio_output_ready", False):
+                    self.backend.unmute_after_user_volume(value)
+                    self.backend._audio_output_ready = True
             self._runtime_volume = value
             self._volume_until = time.monotonic() + 12
             self.save_session(volume=value)
             return f"Громкость: {value}%"
         if command == "seek":
             position = max(0, int(value))
-            self.request("PUT", f"me/player/seek?position_ms={position}&{device}")
+            if local:
+                self.backend.local_control("seek", position)
+                if self.backend.event:
+                    self.backend.event = {**self.backend.event, "position": position, "at": time.monotonic()}
+                self.last_playback = {**self.last_playback, "progress_ms": position}
+            else:
+                self.request("PUT", f"me/player/seek?position_ms={position}&{device}")
             if self.backend:
                 self.backend._snapshot_time = 0
             self._last_remote_poll = 0
             return "Позиция воспроизведения изменена"
+        if local and command in ("next", "previous", "play", "pause"):
+            self.backend.local_control(command)
+            if command in ("play", "pause"):
+                state = self.backend.playback(self.last_playback)
+                self.last_playback = {**state, "is_playing": command == "play"}
+                if self.backend.event:
+                    self.backend.event = {
+                        **self.backend.event,
+                        "playing": command == "play",
+                        "position": state.get("progress_ms", 0),
+                        "at": time.monotonic(),
+                    }
+            return "Пауза" if command == "pause" else "Продолжено" if command == "play" else ""
         if command in ("next", "previous"):
             self.request("POST", f"me/player/{command}?{device}")
         elif command in ("play", "pause"):

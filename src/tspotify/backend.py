@@ -123,6 +123,7 @@ class Backend:
         self.muted = muted
         self.external = external
         self.preferred_volume = 0 if muted else session.load()["volume"]
+        self.local_enabled = False
         self.confirmed_volume = 0
         self._volume_set_at = 0.0
         self.device_id = None
@@ -176,6 +177,12 @@ class Backend:
                 return json.loads(payload) if payload.strip() else None
             except ValueError:
                 raise RuntimeError("Встроенный плеер вернул повреждённые данные воспроизведения.") from None
+
+    def local_control(self, command, value=0):
+        result = self.request({"Local": {"command": command, "value": int(value or 0)}}, timeout=0.3)
+        if not isinstance(result, dict) or not result.get("accepted"):
+            raise RuntimeError("Локальный движок не подтвердил команду")
+        return result
 
     def alive(self):
         return self.pty.isalive() if self.pty else bool(self.process and self.process.poll() is None)
@@ -270,6 +277,24 @@ audio_cache = true
             if self.process and self.process.poll() is not None:
                 raise RuntimeError("Spotify engine завершился при запуске. Выполните tspotify doctor")
             time.sleep(0.15)
+        try:
+            capabilities = self.request({"Local": {"command": "capabilities", "value": 0}}, timeout=0.2)
+            self.local_enabled = capabilities.get("protocol") == 1
+        except (OSError, RuntimeError, AttributeError):
+            self.local_enabled = False
+        if self.local_enabled and not self.external:
+            deadline = time.monotonic() + 5
+            while True:
+                try:
+                    self.local_control("pause")
+                    self.local_control("volume", self.preferred_volume)
+                    self.confirmed_volume = self.preferred_volume
+                    break
+                except RuntimeError as error:
+                    if "still connecting" not in str(error) or time.monotonic() >= deadline:
+                        raise
+                    if self.stopped.wait(0.03):
+                        raise RuntimeError("Подключение плеера отменено") from error
         self._snapshot_time = 0
         if self.pty:
             try:

@@ -91,3 +91,16 @@ def test_volume_zero_is_preserved_as_an_intentional_choice():
     session.save(volume=0, unmuted_volume=55)
     assert Backend().preferred_volume == 0
     assert session.load()["unmuted_volume"] == 55
+
+
+def test_boot_device_zero_never_replaces_saved_volume():
+    session.save(volume=70, track={"id": "saved"}, position_ms=12000)
+    api = Spotify()
+    api.backend = SimpleNamespace(
+        playback=lambda fallback: {"item": {"id": "saved"}, "device": {"volume_percent": 0}}, event={}
+    )
+    try:
+        assert api.playback()["device"]["volume_percent"] == 70
+        assert session.load()["volume"] == 70
+    finally:
+        api.close()

@@ -242,15 +242,14 @@ def run(args):
                 api.backend = backend
                 print("Подключаю Spotify. Первый запуск может занять несколько секунд…", flush=True)
                 backend.start()
-                # The engine starts silent. Do not let a restored Spotify session
-                # become audible; only an explicit play/volume action restores volume.
-                try:
-                    if getattr(backend, "device_id", None):
-                        # Startup discovery can lag the local socket. A best-effort
-                        # pause must not trigger slow recovery before the UI opens.
-                        api.request("PUT", "me/player/pause?" + api.device_query())
-                except SpotifyError:
-                    pass
+                # Start silent, pause locally, then restore the preference while paused.
+                # The boot mute is not the user's saved volume.
+                if not getattr(backend, "local_enabled", False):
+                    try:
+                        if getattr(backend, "device_id", None):
+                            api.request("PUT", "me/player/pause?" + api.device_query())
+                    except SpotifyError:
+                        pass
             api._restore_gate = time.monotonic()
             # Import curses only for the UI: doctor, installation and OAuth work without a TTY.
             import curses

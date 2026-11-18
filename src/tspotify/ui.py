@@ -86,12 +86,14 @@ class App:
         self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=4)
         self.art_pool = concurrent.futures.ThreadPoolExecutor(max_workers=4)
         self.cover_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        self.transport_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2)
         self.events = queue.Queue()
         API.on_status = lambda message: self.events.put(("notice", message, None))
         API.on_volume_retry = lambda target, seconds, applied: self.events.put(
             ("volume_retry", (target, seconds, applied), None)
         )
         self.pending = set()
+        self.transport_revision = 0
         self.thumbnails = OrderedDict()
         self.library_data = {}
         self.library_loaded_at = {}
@@ -268,16 +270,24 @@ class App:
         if key in self.pending:
             return
         self.pending.add(key)
+        if key == "command":
+            self.transport_revision += 1
+        revision = self.transport_revision
 
         def run():
             try:
-                self.events.put((key, fn(*args), None))
+                result = fn(*args)
+                if key == "poll" and isinstance(result, dict):
+                    result = {**result, "_ui_revision": revision}
+                self.events.put((key, result, None))
             except RateLimited as exc:
                 self.events.put((key, None, exc))
             except Exception as exc:
                 self.events.put((key, None, str(exc)))
 
         pool = self.cover_pool if key == "cover" else self.art_pool if key.startswith("thumb:") else self.pool
+        if key in ("volume", "command"):
+            pool = self.transport_pool
         pool.submit(run)
 
     def library(self, section):
@@ -357,7 +367,11 @@ class App:
                     self.notice = (
                         message if not self.volume_dirty else f"Громкость {self.volume}% · применяется…"
                     )
-                    self.volume_due_at = max(self.volume_due_at, self.volume_last_sent + VOLUME_INTERVAL)
+                    self.volume_due_at = max(
+                        self.volume_due_at,
+                        self.volume_last_sent
+                        + (0.025 if getattr(API, "local_controls", False) else VOLUME_INTERVAL),
+                    )
                 continue
             if key == "notice":
                 self.notice = value
@@ -414,10 +428,22 @@ class App:
                 self.restore_selected_row()
                 continue
             if key == "poll":
-                self.playback = value or {}
-                self.updated = time.monotonic()
+                incoming = value or {}
+                if incoming.get("_ui_revision", self.transport_revision) < self.transport_revision:
+                    continue
+                now = time.monotonic()
+                old = self.playback
+                same = (old.get("item") or {}).get("id") == (incoming.get("item") or {}).get("id")
+                if same and old.get("is_playing") and incoming.get("is_playing"):
+                    expected = (old.get("progress_ms") or 0) + max(0, now - self.updated) * 1000
+                    actual = incoming.get("progress_ms") or 0
+                    if abs(actual - expected) < 2500:
+                        incoming = {**incoming, "progress_ms": expected}
+                self.playback = incoming
+                self.updated = now
                 if (
-                    not self.volume_dirty
+                    (not getattr(API, "backend", None) or getattr(API, "external", False))
+                    and not self.volume_dirty
                     and "volume" not in self.pending
                     and volume_now() >= self.volume_local_until
                 ):
@@ -468,6 +494,10 @@ class App:
                 self.restore_selected_row()
                 self.notice = f"Треков: {len(self.items)} · Enter слушать · ← назад"
             elif key == "command":
+                self.transport_revision += 1
+                if getattr(API, "local_controls", False) and getattr(API, "last_playback", None):
+                    self.playback = dict(API.last_playback)
+                    self.updated = time.monotonic()
                 self.notice = value if isinstance(value, str) else "Команда подтверждена"
                 self.track_cover((getattr(API, "last_playback", {}) or {}).get("item") or {})
             elif key == "favorite":
@@ -1240,7 +1270,8 @@ class App:
 
     def command(self, *args):
         if "command" not in self.pending:
-            self.notice = "Выполняю…"
+            if not getattr(API, "local_controls", False):
+                self.notice = "Выполняю…"
             self.submit("command", cli, *args)
 
     def track_cover(self, item):
@@ -1260,12 +1291,18 @@ class App:
         if not self.volume_dirty or "volume" in self.pending:
             return False
         now = volume_now()
-        remaining = max(0.0, getattr(API, "rate_until", 0.0) - time.monotonic())
+        remaining = (
+            0
+            if getattr(API, "local_controls", False)
+            else max(0.0, getattr(API, "rate_until", 0.0) - time.monotonic())
+        )
         if remaining:
             self.volume_retry_until = max(self.volume_retry_until, now + remaining + 0.05)
             self.volume_due_at = max(self.volume_due_at, self.volume_retry_until)
             self.volume_local_until = self.volume_due_at + 12
-        if now < self.volume_due_at or now < self.volume_last_sent + VOLUME_INTERVAL:
+        if now < self.volume_due_at or now < self.volume_last_sent + (
+            0.025 if getattr(API, "local_controls", False) else VOLUME_INTERVAL
+        ):
             return False
         target = self.volume
         self.volume_last_sent = now
@@ -1280,9 +1317,13 @@ class App:
         self.volume = target
         self.volume_dirty = "volume" in self.pending or self.volume != self.volume_applied
         self.volume_due_at = max(
-            volume_now() + VOLUME_DEBOUNCE, self.volume_last_sent + VOLUME_INTERVAL, self.volume_retry_until
+            volume_now() + (0 if getattr(API, "local_controls", False) else VOLUME_DEBOUNCE),
+            self.volume_last_sent + (0.025 if getattr(API, "local_controls", False) else VOLUME_INTERVAL),
+            self.volume_retry_until,
         )
         self.volume_local_until = self.volume_due_at + 12
+        if not DEMO_MODE and hasattr(API, "save_session"):
+            API.save_session(volume=target)
         self.notice = (
             f"Громкость {self.volume}% · применяется…" if self.volume_dirty else f"Громкость: {self.volume}%"
         )
@@ -1488,5 +1529,6 @@ class App:
                 pass
             self.audio.close()
             self.pool.shutdown(wait=False, cancel_futures=True)
+            self.transport_pool.shutdown(wait=False, cancel_futures=True)
             self.art_pool.shutdown(wait=False, cancel_futures=True)
             self.cover_pool.shutdown(wait=False, cancel_futures=True)
