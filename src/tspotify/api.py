@@ -338,6 +338,8 @@ class Spotify:
                         pending = value["item"]["id"]
                     if pending:
                         value["item"] = self.track_metadata(pending)
+                    next_id = value.get("next_track_id")
+                    value["next_item"] = self.track_metadata(next_id) if next_id else None
                     old_item = self.last_playback.get("item") or {}
                     new_item = value.get("item") or {}
                     if old_item.get("id") == new_item.get("id") and not new_item.get("duration_ms"):
@@ -516,7 +518,7 @@ class Spotify:
                                 ]
                         except (OSError, ValueError, TypeError, AttributeError):
                             pass
-                queue = queue or [uri]
+                queue = queue or (None if context_uri else [uri])
                 item["_queue_uris"] = queue
             if queue:
                 self.backend.load_track(uri, context_uri, position_ms, queue)
@@ -600,6 +602,34 @@ class Spotify:
                 return "Воспроизводится: " + item.get("name", "трек")
             time.sleep(0.5)
         raise SpotifyError("Spotify принял запрос, но запуск выбранного трека не подтверждён.")
+
+    def start_jam(self):
+        """Create/retrieve a real Jam using native session credentials, never a track link."""
+        self.ensure_engine()
+        if not self.local_controls or not getattr(self.backend, "native_jam", False):
+            raise SpotifyError("Для Jam нужен обновлённый встроенный движок tspotify")
+        self.backend.local_control("jam-start")
+        deadline = time.monotonic() + 22
+        while time.monotonic() < deadline:
+            state = self.backend.request({"Local": {"command": "state", "value": 0}}, timeout=0.5)
+            jam = (state or {}).get("jam") or {}
+            if jam.get("status") == "error":
+                raise SpotifyError(
+                    "Spotify не создал Jam: " + str(jam.get("message", "неизвестная ошибка"))[:240]
+                )
+            if jam.get("status") == "ready":
+                from urllib.parse import urlparse
+
+                url = jam.get("url", "")
+                parsed = urlparse(url)
+                if parsed.scheme != "https" or not (
+                    parsed.hostname in ("spotify.link", "spotify.com", "open.spotify.com")
+                    or (parsed.hostname or "").endswith(".spotify.link")
+                ):
+                    raise SpotifyError("Spotify вернул неизвестный адрес приглашения Jam")
+                return {"url": url, "members": jam.get("members") or []}
+            time.sleep(0.15)
+        raise SpotifyError("Spotify не подтвердил создание Jam за 22 секунды")
 
     def control(self, command, value=None, _retry=False):
         if command == "volume":

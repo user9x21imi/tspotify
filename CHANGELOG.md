@@ -2,11 +2,20 @@
 
 ## 0.1.0
 
+- Use consistent timeline colors in full redraws and animated frames, eliminating the flashing full-width green bar.
+- Adapt the main window to side-by-side playback/library panels in wide terminals.
+
+- Restart an ended queue from zero with Play; Next can restart the queue after it has stopped, matching the native remote Resume behavior.
+- Preserve uncached album/playlist contexts instead of replacing them with a one-track queue.
+- Expose native upcoming tracks for an accurate Next label, including shuffled order and repeat-one.
+- Adapt the expanded player to portrait and landscape terminals, keeping artwork on the left in wide windows.
+
 - Closing Share/Jam dialogs preserves the expanded player and underlying layout; background animation cannot draw over modal dialogs.
 
 - Native engine v5 applies shuffle and all repeat modes through local Connect controls and exposes authoritative player state.
 - Fix truncated 100-track queue commands and upstream empty-selector handling for phone Connect selections.
-- Add clickable Share, clipboard links for tracks/collections, and an explicit explanation of Spotify Jam API limitations.
+- Add clickable Share and clipboard links for tracks/collections.
+- Create/retrieve native Jam sessions asynchronously, display returned participants and a real invitation link.
 - Keep shuffle/repeat buttons visible in compact and expanded playback views.
 
 - Search inside an open playlist/album instantly by track, artist or album; F2 keeps global Spotify search available.

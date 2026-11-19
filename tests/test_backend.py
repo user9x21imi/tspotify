@@ -288,3 +288,22 @@ def test_native_paused_position_does_not_advance(monkeypatch):
         },
     )
     assert backend.playback({})["progress_ms"] == 2500
+
+
+def test_next_track_follows_native_shuffle_order_and_repeat_mode(monkeypatch):
+    backend = Backend(muted=True)
+    backend.native_state = True
+    snapshot = {
+        "track_uri": "spotify:track:current",
+        "is_playing": True,
+        "position_at_ms": int(time.time() * 1000),
+        "next_uris": ["spotify:track:shuffled"],
+        "queue_current_uri": "spotify:track:current",
+    }
+    monkeypatch.setattr(backend, "request", lambda *a, **kw: dict(snapshot))
+    assert backend.playback({})["next_track_id"] == "shuffled"
+    snapshot["repeat_state"] = "track"
+    assert backend.playback({})["next_track_id"] == "current"
+    snapshot.update(queue_ended=True, queue_current_uri="spotify:track:first")
+    state = backend.playback({})
+    assert state["queue_ended"] and state["next_track_id"] == "first"

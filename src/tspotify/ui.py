@@ -402,6 +402,19 @@ class App:
                         + (0.025 if getattr(API, "local_controls", False) else VOLUME_INTERVAL),
                     )
                 continue
+            if key == "jam":
+                if self.share_dialog and self.share_dialog[0] == "SPOTIFY JAM":
+                    if error:
+                        self.share_dialog = ("SPOTIFY JAM", "Не удалось создать Jam: " + str(error), "")
+                    else:
+                        names = ", ".join(
+                            member.get("name", "Участник") for member in value.get("members", [])
+                        )
+                        body = (
+                            "Участники: " + names + ". " if names else "Jam создан. "
+                        ) + "Скопируйте приглашение кнопкой внизу и отправьте друзьям."
+                        self.share_dialog = ("SPOTIFY JAM", body, value["url"])
+                continue
             if key == "clipboard":
                 self.notice = value
                 if self.share_dialog:
@@ -656,7 +669,14 @@ class App:
 
     def put(self, y, x, text, color=1, bold=False, width=None):
         h, w = self.s.getmaxyx()
-        if y < 0 or y >= h or x < 0 or x >= w:
+        offset = getattr(self, "_panel_x", 0)
+        panel_w = getattr(self, "_panel_width", w)
+        if width is None:
+            width = max(0, panel_w - x - 1)
+        else:
+            width = min(width, max(0, panel_w - x - 1))
+        x += offset
+        if y < 0 or y >= h or x < 0 or x >= w or width <= 0:
             return
         text = str(text).replace("\n", " ").replace("\r", " ").replace("\t", " ")
         if ASCII_ONLY:
@@ -780,7 +800,7 @@ class App:
             self.put(y, x + 2, " " + title + " ", 3 if active else 4, width=width - 5)
 
     def hit(self, y, x, height, width, action, value):
-        self.hits.append((y, x, height, width, action, value))
+        self.hits.append((y, x + getattr(self, "_panel_x", 0), height, width, action, value))
 
     def button(self, y, x, text, key):
         self.put(y, x, text, 3)
@@ -793,23 +813,28 @@ class App:
             self.button(y, x, text, key)
             x += len(text) + 1
 
-    def transport(self, y, w):
+    def transport(self, y, w, x=3, rows=1):
         active = self.playback.get("is_playing", False)
-        self.button_row(
-            y,
-            w,
-            [
-                ("[-]", "-"),
-                ("[+]", "+"),
-                ("[Space Пауза]" if active else "[Space Играть]", " "),
-                ("[m Звук]", "m"),
-                ("[p ◀]", "p"),
-                ("[n ▶]", "n"),
-                ("[f ♥]", "f"),
-                ("[y Share]", "y"),
-                ("[j Jam]", "j"),
-            ],
-        )
+        actions = [
+            ("[-]", "-"),
+            ("[+]", "+"),
+            ("[Space Пауза]" if active else "[Space Играть]", " "),
+            ("[m Звук]", "m"),
+            ("[p ◀]", "p"),
+            ("[n ▶]", "n"),
+            ("[f ♥]", "f"),
+            ("[y Share]", "y"),
+            ("[j Jam]", "j"),
+        ]
+        column, row = x, 0
+        for text, key in actions:
+            if column + len(text) > w - 2:
+                row += 1
+                column = x
+            if row >= rows:
+                break
+            self.button(y + row, column, text, key)
+            column += len(text) + 1
 
     def mode_buttons(self, y, w, x=3):
         repeat = {"off": "выкл", "context": "список", "track": "1 трек"}.get(
@@ -895,67 +920,102 @@ class App:
             return
 
     def render_fullscreen(self, h, w):
-        self.put(1, 4, "NOW PLAYING · точечная обложка · F3 / Esc свернуть", 2, width=w - 8)
+        self.put(1, 4, "NOW PLAYING · F3 / Esc свернуть", 2, width=w - 8)
         self.progress_area = self.spectrum_area = None
-        art_h = max(4, min((w - 12) // 2, h - 19))
+        wide = w >= 110 and w >= 2 * h
+        if wide:
+            left = min(w // 2, 2 * (h - 5) + 4)
+            art_h = max(3, min(h - 6, (left - 6) // 2))
+            ax, ay = (left - art_h * 2) // 2, 3 + (h - 6 - art_h) // 2
+            self.box(2, 1, h - 3, left, "ASCII · NOW PLAYING", True)
+            x, title_y, content_w = left + 3, 4, w - left - 6
+        else:
+            art_h = max(3, min((w - 12) // 2, h - 21))
+            ax, ay = (w - art_h * 2) // 2, 3
+            self.box(2, ax - 2, art_h + 2, art_h * 2 + 4, "ASCII · NOW PLAYING", True)
+            x, title_y, content_w = 4, art_h + 5, w - 8
         art_w = art_h * 2
-        ax = (w - art_w) // 2
-        self.box(2, ax - 2, art_h + 2, art_w + 4, "ASCII · NOW PLAYING", True)
         if self.art:
             if ASCII_ONLY:
-                # Keep the explicit font fallback in the expanded view too.
                 ramp = " .:-=+*#%@"
                 for yy in range(art_h):
                     row = self.art[min(len(self.art) - 1, yy * len(self.art) // art_h)]
                     for xx in range(art_w):
                         rgb = row[min(len(row) - 1, xx * len(row) // art_w)]
-                        self.put(3 + yy, ax + xx, ramp[min(9, int(sum(rgb) / 765 * 9))], 3)
+                        self.put(ay + yy, ax + xx, ramp[min(9, int(sum(rgb) / 765 * 9))], 3)
             else:
-                self.dot_image(self.art, 3, ax, art_w, art_h)
+                self.dot_image(self.art, ay, ax, art_w, art_h)
         else:
-            self.put(3 + art_h // 2, ax, "Загружаю обложку…", 4, width=art_w)
+            self.put(ay + art_h // 2, ax, "Загружаю обложку…", 4, width=art_w)
         item = self.playback.get("item") or {}
-        title_y = art_h + 5
-        self.put(title_y, 4, item.get("name", "Выберите трек в библиотеке"), 1, True, width=w - 8)
-        self.put(
-            title_y + 1, 4, artists(item) + " · " + (item.get("album") or {}).get("name", ""), 3, width=w - 8
-        )
         active = self.playback.get("is_playing", False)
-        self.put(
-            title_y + 2,
-            4,
+        self.put(title_y, x, item.get("name", "Выберите трек в библиотеке"), 1, True, width=content_w)
+        self.put(title_y + 1, x, artists(item), 3, width=content_w)
+        self.put(title_y + 2, x, (item.get("album") or {}).get("name", ""), 7, width=content_w)
+        status = (
             "◌ ЗАГРУЗКА"
             if self.playback.get("is_loading")
             else "● ИГРАЕТ"
             if active
-            else "Ⅱ ПАУЗА · Space продолжить",
-            2 if active else 5,
+            else "КОНЕЦ ОЧЕРЕДИ · Space с начала"
+            if self.playback.get("queue_ended")
+            else "Ⅱ ПАУЗА · Space продолжить"
         )
-        self.mode_buttons(title_y + 2, w, x=30)
+        self.put(title_y + 3, x, status, 2 if active else 5, width=content_w)
+        self.mode_buttons(title_y + 4, x + content_w + 2, x=x)
         total = item.get("duration_ms") or 0
         ms = min(
             total,
             (self.playback.get("progress_ms") or 0)
             + ((time.monotonic() - self.updated) * 1000 if active else 0),
         )
-        width = w - 25
+        width = max(8, content_w - 19)
+        bar_y = title_y + 5
+        self.progress_area = (bar_y, x, width)
+        self.hit(bar_y, x, 1, width, "seek", None)
         filled = int(width * ms / total) if total else 0
-        self.progress_area = (title_y + 3, 4, width)
-        self.hit(title_y + 3, 4, 1, width, "seek", None)
-        self.put(title_y + 3, 4, "━" * filled + "─" * (width - filled), 2)
-        self.put(title_y + 3, width + 6, f"{duration(ms)} / {duration(total)}", 4)
-        self.transport(title_y + 5, w)
-        sy = title_y + 7
-        self.put(sy - 1, 4, "Спектр Spotify · " + self.audio.status, 4, width=w - 8)
-        self.spectrum_area = (sy, 4, max(1, h - sy - 3), w - 8)
+        self.put(bar_y, x, "━" * filled, 2)
+        self.put(bar_y, x + filled, "─" * (width - filled), 11)
+        self.put(bar_y, x + width + 2, f"{duration(ms)} / {duration(total)}", 4, width=17)
+        self.transport(title_y + 7, x + content_w + 2, x=x, rows=2 if wide else 1)
+        sy = title_y + (11 if wide else 9)
+        self.put(sy - 1, x, "Спектр Spotify · " + self.audio.status, 4, width=content_w)
+        self.spectrum_area = (sy, x, max(1, h - sy - 4), content_w)
         self.spectrum(*self.spectrum_area)
+        self.render_next(h - 4, x, content_w)
         self.put(
-            h - 2, 4, f"Громкость {self.volume}% · ± / F11/F12 · F3/Esc назад · Ctrl+Q выход", 3, width=w - 8
+            h - 2,
+            x,
+            (
+                f"Громк. {self.volume}% · F11/F12 · F3 · Ctrl+Q"
+                if wide
+                else f"Громкость {self.volume}% · F11/F12 · F3/Esc · Ctrl+Q выход"
+            ),
+            3,
+            width=content_w,
         )
-        self.put(h - 1, 4, self.notice, 4, width=w - 8)
+        self.put(h - 1, x, self.notice, 4, width=content_w)
+
+    def render_next(self, y, x, width):
+        item = self.playback.get("next_item") or {}
+        if item.get("name"):
+            label = "Далее: " + artists(item) + " — " + item["name"]
+            if self.playback.get("queue_ended"):
+                label = "С начала: " + artists(item) + " — " + item["name"]
+        else:
+            label = (
+                "Далее: очередь завершена"
+                if self.playback.get("queue_ended")
+                else "Далее: загружаю название…"
+                if self.playback.get("next_track_id")
+                else "Далее: нет следующего трека в очереди"
+            )
+        self.put(y, x, label, 3, width=width)
 
     def render(self):
         self.hits = []
+        self._panel_x = 0
+        self._panel_width = self.s.getmaxyx()[1]
         self.spectrum_area = self.progress_area = None
         self.s.erase()
         h, w = self.s.getmaxyx()
@@ -1010,11 +1070,31 @@ class App:
                 "spectrum": spectrum_h,
             }
             order = ["search", "library", "player", "spectrum"]
-        y = 2
-        for name in order:
-            if heights[name]:
-                getattr(self, "render_" + name)(y, w, heights[name])
-                y += heights[name] + 1
+        wide = h >= 30 and w >= 140 and w >= 2 * h and not self.search_layout
+        if wide:
+            left_w = w // 2 - 1
+            body_h = h - 8
+            player_h = max(8, min(body_h - (10 if self.show_spectrum else 4), (left_w - 40) // 2 + 4))
+            spectrum_h = max(5, body_h - player_h - 5) if self.show_spectrum else 0
+            if not self.show_spectrum:
+                player_h = body_h - 4
+            heights.update(search=3, player=player_h, spectrum=spectrum_h)
+            y = 2
+            for name in self.order:
+                if name != "library" and heights[name]:
+                    getattr(self, "render_" + name)(y, left_w, heights[name])
+                    y += heights[name] + 1
+            self._panel_x, self._panel_width = left_w + 1, w - left_w - 1
+            try:
+                self.render_library(2, self._panel_width, body_h)
+            finally:
+                self._panel_x, self._panel_width = 0, w
+        else:
+            y = 2
+            for name in order:
+                if heights[name]:
+                    getattr(self, "render_" + name)(y, w, heights[name])
+                    y += heights[name] + 1
         self.box(
             h - 5,
             1,
@@ -1081,7 +1161,7 @@ class App:
         self.hit(y, 1, height, w - 2, "panel", "player")
         self.box(y, 1, height, w - 2, "Сейчас играет · " + mode, self.focus_panel == "player")
         self.button(y, w - 20, "[F3 Развернуть]", curses.KEY_F3)
-        art_h = height - 4
+        art_h = max(2, min(height - 4, (w - 40) // 2))
         art_w = art_h * 2
         ax = w - art_w - 4 if self.cover_right else 3
         x = 3 if self.cover_right else art_w + 7
@@ -1122,7 +1202,13 @@ class App:
         self.put(
             y + (1 if height < 11 else 2),
             x,
-            "◌ ЗАГРУЗКА" if self.playback.get("is_loading") else "● ВОСПРОИЗВЕДЕНИЕ" if active else "Ⅱ ПАУЗА",
+            "◌ ЗАГРУЗКА"
+            if self.playback.get("is_loading")
+            else "● ВОСПРОИЗВЕДЕНИЕ"
+            if active
+            else "КОНЕЦ ОЧЕРЕДИ · Space с начала"
+            if self.playback.get("queue_ended")
+            else "Ⅱ ПАУЗА",
             2 if active else 5,
             width=width,
         )
@@ -1186,8 +1272,11 @@ class App:
         self.box(
             y, 1, height, w - 2, "Спектр · Spotify · " + self.audio.status, self.focus_panel == "spectrum"
         )
-        self.spectrum(y + 1, 4, height - 2, w - 8)
-        self.spectrum_area = (y + 1, 4, height - 2, w - 8)
+        bars_h = height - (3 if height >= 5 else 2)
+        self.spectrum(y + 1, 4, bars_h, w - 8)
+        self.spectrum_area = (y + 1, 4, bars_h, w - 8)
+        if height >= 5:
+            self.render_next(y + height - 2, 4, w - 8)
 
     def animate(self):
         if self.help or self.layout_editor or self.share_dialog:
@@ -1518,7 +1607,7 @@ class App:
             ("← / Backspace", "Вернуться к предыдущему списку"),
             ("s / r", "Перемешивание / повтор: список → трек → выкл."),
             ("y / Y", "Ссылка: текущий трек / выбранная строка"),
-            ("j", "Jam: ограничения создания приглашений"),
+            ("j", "Создать Jam / получить приглашение"),
             ("L", "Редактор порядка окон и обложки"),
             ("a", "Обложка: точки / ASCII / блоки"),
             ("? / F1 · Esc", "Показать / закрыть эту справку"),
@@ -1920,13 +2009,8 @@ class App:
         elif k in ("y", "Y"):
             self.share(selected=k == "Y")
         elif k == "j":
-            self.share_dialog = (
-                "SPOTIFY JAM",
-                "Spotify не предоставляет публичный API создания Jam. Создайте Jam в официальном "
-                "Spotify: меню трека → Начать Jam → Пригласить → Скопировать ссылку. "
-                "Обычная ссылка на трек не является приглашением в Jam. Ниже — инструкция Spotify.",
-                "https://support.spotify.com/article/jam/",
-            )
+            self.share_dialog = ("SPOTIFY JAM", "Создаю Jam и получаю приглашение от Spotify…", "")
+            self.submit("jam", API.start_jam)
         elif k == "f":
             track = self.playback.get("item") or {}
             if track.get("id") and track.get("type") == "track" and "favorite" not in self.pending:

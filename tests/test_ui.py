@@ -1219,3 +1219,102 @@ def test_share_close_mouse_button_returns_to_fullscreen_player(app, monkeypatch)
     monkeypatch.setattr(curses, "getmouse", lambda: (0, x, y, 0, curses.BUTTON1_CLICKED))
     app.key(curses.KEY_MOUSE)
     assert app.share_dialog is None and app.fullscreen
+
+
+@pytest.mark.parametrize(
+    "size,wide", [((24, 80), False), ((72, 100), False), ((45, 120), True), ((48, 160), True)]
+)
+def test_expanded_layout_adapts_and_places_next_below_spectrum(app, size, wide):
+    app.s.size = size
+    app.fullscreen = True
+    app.playback["next_item"] = {"name": "Next song", "artists": [{"name": "Next artist"}]}
+    app.art = [[(150, 180, 200)] * 32 for _ in range(32)]
+    app.render()
+    title = next((y, x) for y, x, text in app.s.calls if text == "Track")
+    sy, sx, sh, sw = app.spectrum_area
+    assert (title[1] > size[1] // 2) is wide
+    assert sx == title[1]
+    next_y = next(y for y, x, text in app.s.calls if "Далее: Next artist — Next song" in text)
+    assert next_y >= sy + sh
+    keys = {v for _, _, _, _, action, v in app.hits if action == "key"}
+    assert {" ", "n", "p", "s", "r", "y", "j", "+", "-"} <= keys
+    before = [call for call in app.s.calls if call[0] == next_y]
+    app.animate()
+    assert [call for call in app.s.calls if call[0] == next_y] == before
+
+
+def test_expanded_timeline_unfilled_color_matches_animated_frame(app, monkeypatch):
+    app.fullscreen = True
+    app.playback.update(progress_ms=30000, is_playing=False)
+    app.playback["item"]["duration_ms"] = 300000
+    calls = []
+    original = app.put
+
+    def capture(y, x, text, color=1, *args, **kwargs):
+        calls.append((y, x, text, color))
+        original(y, x, text, color, *args, **kwargs)
+
+    monkeypatch.setattr(app, "put", capture)
+    app.render()
+    y, x, width = app.progress_area
+    rendered = [c for c in calls if c[0] == y and c[2].startswith("─")]
+    assert rendered and rendered[-1][3] == 11
+    calls.clear()
+    app.animate()
+    animated = [c for c in calls if c[0] == y and c[2].startswith("─")]
+    assert rendered == animated
+
+
+@pytest.mark.parametrize("size,wide", [((72, 100), False), ((48, 160), True), ((30, 140), True)])
+def test_main_screen_uses_columns_only_in_wide_windows(app, size, wide):
+    app.s.size = size
+    order = list(app.order)
+    app.render()
+    player = next(hit for hit in app.hits if hit[4:] == ("panel", "player"))
+    library = next(hit for hit in app.hits if hit[4:] == ("panel", "library"))
+    if wide:
+        assert library[1] >= size[1] // 2
+        assert library[0] < player[0]
+        assert player[1] + player[3] < library[1]
+    else:
+        assert library[0] > player[0]
+        assert library[1] == player[1]
+    assert app.order == order
+
+
+def test_wide_library_mouse_hits_use_second_column_coordinates(app, monkeypatch):
+    app.s.size = (48, 160)
+    app.render()
+    row = next(hit for hit in app.hits if hit[4] == "row")
+    assert row[1] >= 80
+    mouse_at(app, monkeypatch, row[1], row[0], curses.BUTTON1_CLICKED)
+    settle(app)
+    assert any(name == "context" for name, _ in app.test_calls)
+
+
+def test_jam_button_creates_session_and_shows_real_invite_at_bottom(app, monkeypatch):
+    monkeypatch.setattr(
+        ui.API,
+        "start_jam",
+        lambda: {"url": "https://spotify.link/actualInvite", "members": [{"name": "Host"}]},
+        raising=False,
+    )
+    app.fullscreen = True
+    app.key("j")
+    settle(app)
+    assert app.share_dialog[2] == "https://spotify.link/actualInvite"
+    app.render()
+    assert any("Копировать" in text for _, _, text in app.s.calls)
+    app.key("\x1b")
+    assert app.share_dialog is None and app.fullscreen
+
+
+def test_jam_error_replaces_loading_dialog(app, monkeypatch):
+    def denied():
+        raise RuntimeError("Denied by Spotify")
+
+    monkeypatch.setattr(ui.API, "start_jam", denied, raising=False)
+    app.key("j")
+    settle(app)
+    assert app.share_dialog[2] == ""
+    assert "Denied by Spotify" in app.share_dialog[1]

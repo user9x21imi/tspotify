@@ -691,3 +691,74 @@ def test_native_modes_do_not_call_web_api(api, monkeypatch, command, initial, ex
     monkeypatch.setattr(api, "request", lambda *a, **kw: pytest.fail("Native modes must not use Web API"))
     api.control(command)
     assert calls == [(command, expected)]
+
+
+def test_play_at_queue_end_uses_native_restart_and_keeps_actual_queue(api, monkeypatch):
+    calls = []
+    item = {"id": "ended", "name": "Ended"}
+    api.backend = SimpleNamespace(
+        local_enabled=True,
+        event={},
+        local_control=lambda *args: calls.append(args),
+        playback=lambda _: {"queue_ended": True, "item": item, "progress_ms": 400000, "is_playing": False},
+    )
+    api.idle = False
+    monkeypatch.setattr(api, "ensure_engine", lambda: None)
+    monkeypatch.setattr(
+        api, "start", lambda *a, **kw: pytest.fail("Do not replace native queue with saved album")
+    )
+    api.control("play-pause")
+    assert calls == [("play",)]
+
+
+def test_uncached_native_album_keeps_context_instead_of_single_track_queue(api, monkeypatch):
+    calls = []
+    api.backend = SimpleNamespace(
+        local_enabled=True,
+        local_load=True,
+        local_queue=True,
+        _events=lambda: None,
+        load_track=lambda *a: calls.append(a),
+        wait_playing=lambda *a, **kw: None,
+        device_id="native",
+        event={},
+        muted=True,
+    )
+    monkeypatch.setattr(api, "ensure_engine", lambda: None)
+    monkeypatch.setattr(api, "activate_output_volume", lambda: None)
+    api.start({"id": "a" * 22, "duration_ms": 180000}, context_uri="spotify:album:album")
+    assert calls == [("spotify:track:" + "a" * 22, "spotify:album:album", 0)]
+
+
+def test_jam_uses_native_session_and_returns_only_server_invitation(api, monkeypatch):
+    calls = []
+    api.backend = SimpleNamespace(
+        local_enabled=True,
+        native_jam=True,
+        local_control=lambda *args: calls.append(args),
+        request=lambda *args, **kwargs: {
+            "jam": {
+                "status": "ready",
+                "url": "https://spotify.link/realInvite",
+                "members": [{"name": "Host"}],
+            }
+        },
+    )
+    monkeypatch.setattr(api, "ensure_engine", lambda: None)
+    monkeypatch.setattr(
+        api, "request", lambda *a, **kw: pytest.fail("Do not use Web API or construct track URLs")
+    )
+    value = api.start_jam()
+    assert calls == [("jam-start",)] and value["url"] == "https://spotify.link/realInvite"
+
+
+def test_jam_server_rejection_is_not_reported_as_created(api, monkeypatch):
+    api.backend = SimpleNamespace(
+        local_enabled=True,
+        native_jam=True,
+        local_control=lambda *args: None,
+        request=lambda *args, **kwargs: {"jam": {"status": "error", "message": "Forbidden"}},
+    )
+    monkeypatch.setattr(api, "ensure_engine", lambda: None)
+    with pytest.raises(SpotifyError, match="Forbidden"):
+        api.start_jam()

@@ -128,6 +128,7 @@ class Backend:
         self.local_queue = False
         self.native_state = False
         self.local_modes = False
+        self.native_jam = False
         self.native_snapshot = {}
         self.confirmed_volume = 0
         self._volume_set_at = 0.0
@@ -309,6 +310,7 @@ audio_cache = true
             self.local_queue = bool(capabilities.get("local_queue"))
             self.native_state = bool(capabilities.get("native_state"))
             self.local_modes = bool(capabilities.get("local_modes"))
+            self.native_jam = bool(capabilities.get("native_jam"))
         except (OSError, RuntimeError, AttributeError):
             self.local_enabled = False
         if self.local_enabled and not self.external:
@@ -523,6 +525,21 @@ audio_cache = true
             result["repeat_state"] = state.get("desired_repeat", state.get("repeat_state", "off"))
             result["modes_pending"] = "desired_shuffle" in state or "desired_repeat" in state
             result["native_seek_revision"] = state.get("seek_revision", 0)
+            result["queue_ended"] = bool(state.get("queue_ended"))
+            next_uris = state.get("next_uris") or []
+            next_uri = (
+                state.get("queue_current_uri")
+                if result["queue_ended"]
+                else state.get("track_uri")
+                if result["repeat_state"] == "track"
+                else next_uris[0]
+                if next_uris
+                else ""
+            ) or ""
+            result["next_track_id"] = (
+                next_uri.removeprefix("spotify:track:") if next_uri.startswith("spotify:track:") else None
+            )
+            result["native_context_uri"] = state.get("context_uri")
             result["device"] = {
                 "id": self.device_id,
                 "name": "tspotify",
