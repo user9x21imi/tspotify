@@ -662,3 +662,32 @@ def test_pre_activation_volume_is_applied_again_when_native_audio_becomes_active
     assert actual[0] == 70
     api.playback()
     assert commands == [("volume", 70), ("volume", 70)]
+
+
+@pytest.mark.parametrize(
+    "command,initial,expected",
+    [
+        ("shuffle", False, 1),
+        ("shuffle", True, 0),
+        ("repeat", "off", 1),
+        ("repeat", "context", 2),
+        ("repeat", "track", 0),
+    ],
+)
+def test_native_modes_do_not_call_web_api(api, monkeypatch, command, initial, expected):
+    calls = []
+    state = {
+        "shuffle_state": initial if command == "shuffle" else False,
+        "repeat_state": initial if command == "repeat" else "off",
+    }
+    api.backend = SimpleNamespace(
+        local_enabled=True,
+        local_modes=True,
+        playback=lambda fallback: dict(state),
+        local_control=lambda *args: calls.append(args),
+    )
+    api.external = False
+    monkeypatch.setattr(api, "ensure_engine", lambda: None)
+    monkeypatch.setattr(api, "request", lambda *a, **kw: pytest.fail("Native modes must not use Web API"))
+    api.control(command)
+    assert calls == [(command, expected)]

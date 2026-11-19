@@ -128,6 +128,7 @@ class App:
         self.context_kind = "список"
         self.editing = False
         self.help = False
+        self.share_dialog = None
         self.help_offset = 0
         self.layout_editor = False
         self.fullscreen = False
@@ -400,6 +401,12 @@ class App:
                         + (0.025 if getattr(API, "local_controls", False) else VOLUME_INTERVAL),
                     )
                 continue
+            if key == "clipboard":
+                self.notice = value
+                if self.share_dialog:
+                    title, _, url = self.share_dialog
+                    self.share_dialog = (title, value, url)
+                continue
             if key == "notice":
                 self.notice = value
                 continue
@@ -481,13 +488,20 @@ class App:
                 ):
                     continue
                 same = (old.get("item") or {}).get("id") == (incoming.get("item") or {}).get("id")
-                if same and old.get("is_playing") and incoming.get("is_playing"):
+                if (
+                    same
+                    and old.get("is_playing")
+                    and incoming.get("is_playing")
+                    and old.get("native_seek_revision") == incoming.get("native_seek_revision")
+                ):
                     expected = (old.get("progress_ms") or 0) + max(0, now - self.updated) * 1000
                     actual = incoming.get("progress_ms") or 0
                     if abs(actual - expected) < 2500:
                         incoming = {**incoming, "progress_ms": expected}
                 self.playback = incoming
                 self.updated = now
+                if not incoming.get("modes_pending") and self.notice.endswith(" · ожидает применения"):
+                    self.notice = self.notice.removesuffix(" · ожидает применения")
                 if incoming.get("is_playing") and self.notice.startswith(
                     ("Воспроизводится:", "Переподключаю", "Плеер подключён", "Команда выполнена")
                 ):
@@ -788,11 +802,20 @@ class App:
                 ("[+]", "+"),
                 ("[Space Пауза]" if active else "[Space Играть]", " "),
                 ("[m Звук]", "m"),
-                ("[p Назад]", "p"),
-                ("[n Далее]", "n"),
+                ("[p ◀]", "p"),
+                ("[n ▶]", "n"),
                 ("[f ♥]", "f"),
+                ("[y Share]", "y"),
+                ("[j Jam]", "j"),
             ],
         )
+
+    def mode_buttons(self, y, w, x=3):
+        repeat = {"off": "выкл", "context": "список", "track": "1 трек"}.get(
+            self.playback.get("repeat_state", "off"), "выкл"
+        )
+        shuffle = "вкл" if self.playback.get("shuffle_state") else "выкл"
+        self.button_row(y, w, [(f"[s Shuffle: {shuffle}]", "s"), (f"[r Повтор: {repeat}]", "r")], x=x)
 
     def mouse(self):
         self.mouse_changed = False
@@ -907,6 +930,7 @@ class App:
             else "Ⅱ ПАУЗА · Space продолжить",
             2 if active else 5,
         )
+        self.mode_buttons(title_y + 2, w, x=30)
         total = item.get("duration_ms") or 0
         ms = min(
             total,
@@ -950,6 +974,8 @@ class App:
             self.render_fullscreen(h, w)
             if self.help:
                 self.render_help(h, w)
+            if self.share_dialog:
+                self.render_share(h, w)
             curses.curs_set(0)
             self.s.refresh()
             return
@@ -1003,6 +1029,7 @@ class App:
         self.put(h - 4, 21, f"{self.volume:3d}%", 1, True)
         self.put(h - 4, 30, self.notice, 4, width=w - 34)
         self.transport(h - 3, w)
+        self.mode_buttons(h - 2, w)
         self.button_row(
             h - 1,
             w,
@@ -1019,7 +1046,9 @@ class App:
             self.render_help(h, w)
         if self.layout_editor:
             self.render_layout(h, w)
-        if self.editing and not self.help and not self.layout_editor:
+        if self.share_dialog:
+            self.render_share(h, w)
+        if self.editing and not self.help and not self.layout_editor and not self.share_dialog:
             curses.curs_set(1)
             self.s.move(self.search_y, min(w - 4, 5 + len(self.query)))
         else:
@@ -1421,6 +1450,47 @@ class App:
             color = 7 if j < height * 0.25 else (3 if j < height * 0.6 else 2)
             self.put(y + j, x, "".join(pieces), color)
 
+    def render_share(self, h, w):
+        self.hits = []
+        import textwrap
+
+        title, body, url = self.share_dialog
+        bw = min(w - 4, 92)
+        lines = textwrap.wrap(body, bw - 6)
+        if url:
+            lines += [""] + textwrap.wrap(url, bw - 6)
+        by, bx = max(1, (h - len(lines) - 7) // 2), (w - bw) // 2
+        for row in range(len(lines) + 7):
+            self.put(by + row, bx, " " * bw, 9)
+        self.put(by + 1, bx + 3, title, 2, True, width=bw - 6)
+        for row, line in enumerate(lines):
+            self.put(by + row + 3, bx + 3, line, 9, width=bw - 6)
+        actions = [("[Esc Закрыть]", "\x1b")]
+        if url:
+            actions.insert(0, ("[c Копировать]", "c"))
+        self.button_row(by + len(lines) + 4, bx + bw, actions, x=bx + 3)
+
+    def share(self, selected=False):
+        from .sharing import share_url
+
+        if selected and self.items:
+            kind, item = self.items[self.selected]
+            item = {**item, "type": kind}
+        else:
+            item = self.playback.get("item") or {}
+        url = share_url(item)
+        if not url:
+            self.notice = "Сначала выберите трек, альбом или плейлист"
+            return
+        self.share_dialog = ("ПОДЕЛИТЬСЯ", item.get("name", "Spotify"), url)
+        self.copy_share()
+
+    def copy_share(self):
+        from .sharing import copy_link
+
+        if self.share_dialog and self.share_dialog[2]:
+            self.submit("clipboard", copy_link, self.share_dialog[2])
+
     def render_help(self, h, w):
         self.hits = []
         lines = [
@@ -1445,7 +1515,9 @@ class App:
             ("Щелчок мышью", "Открыть плейлист / включить трек"),
             ("o", "Открыть список треков плейлиста / альбома"),
             ("← / Backspace", "Вернуться к предыдущему списку"),
-            ("s / r", "Перемешивание / повтор"),
+            ("s / r", "Перемешивание / повтор: список → трек → выкл."),
+            ("y / Y", "Ссылка: текущий трек / выбранная строка"),
+            ("j", "Jam: ограничения создания приглашений"),
             ("L", "Редактор порядка окон и обложки"),
             ("a", "Обложка: точки / ASCII / блоки"),
             ("? / F1 · Esc", "Показать / закрыть эту справку"),
@@ -1784,6 +1856,12 @@ class App:
                 self.save_layout()
                 self.layout_editor = False
             return
+        if getattr(self, "share_dialog", None):
+            if k in ("\x1b", "q", "\n", "\r"):
+                self.share_dialog = None
+            elif k == "c":
+                self.copy_share()
+            return
         if self.help:
             if k in (curses.KEY_UP, curses.KEY_DOWN):
                 self.help_offset = max(0, self.help_offset + (-1 if k == curses.KEY_UP else 1))
@@ -1837,6 +1915,16 @@ class App:
             self.enter_search_layout()
         elif k == "q":
             self.running = False
+        elif k in ("y", "Y"):
+            self.share(selected=k == "Y")
+        elif k == "j":
+            self.share_dialog = (
+                "SPOTIFY JAM",
+                "Spotify не предоставляет публичный API создания Jam. Создайте Jam в официальном "
+                "Spotify: меню трека → Начать Jam → Пригласить → Скопировать ссылку. "
+                "Обычная ссылка на трек не является приглашением в Jam. Ниже — инструкция Spotify.",
+                "https://support.spotify.com/article/jam/",
+            )
         elif k == "f":
             track = self.playback.get("item") or {}
             if track.get("id") and track.get("type") == "track" and "favorite" not in self.pending:
@@ -1861,7 +1949,9 @@ class App:
                 self.submit("command", API.start_context, kind, item)
         elif k == "P" and self.items:
             kind, item = self.items[self.selected]
-            if kind in ("playlist", "album", "artist"):
+            if kind == "track":
+                self.start_track(item)
+            elif kind in ("playlist", "album", "artist"):
                 self.notice = "Запускаю плейлист…"
                 self.submit("command", API.start_context, kind, item)
         elif k == "o" and self.items:

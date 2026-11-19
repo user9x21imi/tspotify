@@ -126,6 +126,9 @@ class Backend:
         self.local_enabled = False
         self.local_load = False
         self.local_queue = False
+        self.native_state = False
+        self.local_modes = False
+        self.native_snapshot = {}
         self.confirmed_volume = 0
         self._volume_set_at = 0.0
         self.device_id = None
@@ -157,7 +160,10 @@ class Backend:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
             sock.settimeout(timeout)
             sock.connect(("127.0.0.1", paths.PORT))
-            sock.send(json.dumps(request).encode())
+            payload = json.dumps(request).encode()
+            if len(payload) > 60000:
+                raise RuntimeError("Слишком большая команда очереди; сократите список")
+            sock.send(payload)
             data = bytearray()
             while True:
                 chunk = sock.recv(8192)
@@ -301,6 +307,8 @@ audio_cache = true
             self.local_enabled = capabilities.get("protocol") == 1
             self.local_load = bool(capabilities.get("local_load"))
             self.local_queue = bool(capabilities.get("local_queue"))
+            self.native_state = bool(capabilities.get("native_state"))
+            self.local_modes = bool(capabilities.get("local_modes"))
         except (OSError, RuntimeError, AttributeError):
             self.local_enabled = False
         if self.local_enabled and not self.external:
@@ -369,7 +377,37 @@ audio_cache = true
                 self.authorizing.clear()
         # Runtime logs go to the engine cache, so stream the log too via playback().
 
+    def read_native_state(self):
+        value = self.request({"Local": {"command": "state", "value": 0}}, timeout=0.3) or {}
+        self.native_snapshot = value
+        identity = value.get("device_id")
+        if identity and identity != self.device_id:
+            self.device_id = identity
+            self._volume_active = self._audio_output_ready = False
+        uri = value.get("track_uri") or ""
+        if uri.startswith("spotify:track:"):
+            stamp = value.get("position_at_ms") or value.get("event_at_ms") or time.time() * 1000
+            signature = (uri, stamp, value.get("is_playing"), value.get("is_loading"))
+            if signature != self.event.get("signature"):
+                self.event = {
+                    "signature": signature,
+                    "track_id": uri.removeprefix("spotify:track:"),
+                    "playing": bool(value.get("is_playing")),
+                    "position": int(value.get("position_ms") or 0),
+                    "at": time.monotonic() - max(0, time.time() - stamp / 1000),
+                }
+        failure = value.get("failure_uri") or ""
+        if failure.startswith("spotify:track:"):
+            self.failure = failure.removeprefix("spotify:track:")
+            self.failure_at = time.monotonic() - max(
+                0, time.time() - (value.get("failure_at_ms") or 0) / 1000
+            )
+        return value
+
     def _events(self):
+        if self.native_state:
+            self.read_native_state()
+            return
         files = list(paths.BACKEND_CACHE.glob("spotify-player-*.log"))
         if not files:
             return
@@ -467,6 +505,30 @@ audio_cache = true
 
     def playback(self, fallback):
         self._events()
+        if self.native_state:
+            state = self.native_snapshot
+            result = dict(fallback)
+            if self.event:
+                if (result.get("item") or {}).get("id") != self.event["track_id"]:
+                    result["item"] = None
+                    result["_pending_track_id"] = self.event["track_id"]
+                elapsed = max(0, time.monotonic() - self.event["at"]) if self.event["playing"] else 0
+                result.update(
+                    is_playing=self.event["playing"], progress_ms=self.event["position"] + elapsed * 1000
+                )
+            else:
+                result["is_playing"] = False
+            result["is_loading"] = bool(state.get("is_loading"))
+            result["shuffle_state"] = state.get("desired_shuffle", state.get("shuffle_state", False))
+            result["repeat_state"] = state.get("desired_repeat", state.get("repeat_state", "off"))
+            result["modes_pending"] = "desired_shuffle" in state or "desired_repeat" in state
+            result["native_seek_revision"] = state.get("seek_revision", 0)
+            result["device"] = {
+                "id": self.device_id,
+                "name": "tspotify",
+                "volume_percent": state.get("volume_percent", self.preferred_volume),
+            }
+            return result
         changed = bool(self.event and (self._base.get("item") or {}).get("id") != self.event.get("track_id"))
         if time.monotonic() - self._snapshot_time > (0.1 if changed else 5):
             try:

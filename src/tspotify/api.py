@@ -674,6 +674,23 @@ class Spotify:
                 self.backend._snapshot_time = 0
             self._last_remote_poll = 0
             return "Позиция воспроизведения изменена"
+        if local and command in ("shuffle", "repeat"):
+            if not getattr(self.backend, "local_modes", False):
+                raise SpotifyError("Нужно обновление встроенного движка для shuffle/repeat")
+            state = self.backend.playback(self.last_playback)
+            if command == "shuffle":
+                target = not state.get("shuffle_state", False)
+                self.backend.local_control("shuffle", int(target))
+                message = "Перемешивание: " + ("включено" if target else "выключено")
+            else:
+                modes = ["off", "context", "track"]
+                target = modes[(modes.index(state.get("repeat_state", "off")) + 1) % len(modes)]
+                self.backend.local_control("repeat", modes.index(target))
+                message = "Повтор: " + {"off": "выключен", "context": "список", "track": "один трек"}[target]
+            self.last_playback = self.backend.playback(state)
+            if self.last_playback.get("modes_pending"):
+                message += " · ожидает применения"
+            return message
         if local and command in ("next", "previous", "play", "pause"):
             self.backend.local_control(command)
             if command in ("play", "pause"):

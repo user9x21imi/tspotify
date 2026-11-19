@@ -247,3 +247,44 @@ def test_start_never_takes_over_another_running_engine(monkeypatch):
     monkeypatch.setattr(backend, "local_control", lambda *a: pytest.fail("Must not change another engine"))
     with pytest.raises(RuntimeError, match="уже занят"):
         backend.start()
+
+
+def test_native_snapshot_is_authoritative_and_mode_events_do_not_reset_clock(monkeypatch):
+    backend = Backend(muted=True)
+    backend.native_state = True
+    stamp = int(time.time() * 1000) - 1000
+    snapshot = {
+        "device_id": "native",
+        "track_uri": "spotify:track:chosen",
+        "position_ms": 2000,
+        "position_at_ms": stamp,
+        "is_playing": True,
+        "repeat_state": "track",
+        "shuffle_state": True,
+    }
+    monkeypatch.setattr(backend, "request", lambda *a, **kw: dict(snapshot))
+    value = backend.playback({"item": {"id": "old"}, "repeat_state": "off"})
+    anchor = backend.event["at"]
+    assert value["_pending_track_id"] == "chosen" and value["item"] is None
+    assert 2900 < value["progress_ms"] < 3500
+    assert value["repeat_state"] == "track" and value["shuffle_state"] is True
+    snapshot.update(event_at_ms=stamp + 900, shuffle_state=False, seek_revision=1)
+    value = backend.playback({"item": {"id": "chosen"}})
+    assert backend.event["at"] == anchor
+    assert value["shuffle_state"] is False and value["native_seek_revision"] == 1
+
+
+def test_native_paused_position_does_not_advance(monkeypatch):
+    backend = Backend(muted=True)
+    backend.native_state = True
+    monkeypatch.setattr(
+        backend,
+        "request",
+        lambda *a, **kw: {
+            "track_uri": "spotify:track:chosen",
+            "position_ms": 2500,
+            "position_at_ms": int(time.time() * 1000) - 30000,
+            "is_playing": False,
+        },
+    )
+    assert backend.playback({})["progress_ms"] == 2500

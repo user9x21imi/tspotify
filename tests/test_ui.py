@@ -1163,3 +1163,21 @@ def test_back_from_global_search_restores_complete_collection(app):
     assert app.section == "Collection"
     assert len(app.items) == 3
     assert app.items[app.selected][1]["name"] == "Second"
+
+
+def test_modes_and_share_are_clickable_in_compact_window(app):
+    app.s.size = (24, 78)
+    app.render()
+    keys = {value for _, _, _, _, action, value in app.hits if action == "key"}
+    assert {"s", "r", "y", "j"} <= keys
+
+
+def test_share_selected_playlist_and_current_track_have_different_links(app, monkeypatch):
+    monkeypatch.setattr(app, "copy_share", lambda: None)
+    app.items = [("playlist", {"id": "mix", "uri": "spotify:playlist:mix", "name": "Mix"})]
+    app.selected = 0
+    app.key("Y")
+    assert app.share_dialog[2] == "https://open.spotify.com/playlist/mix"
+    app.key("\x1b")
+    app.key("y")
+    assert app.share_dialog[2] == "https://open.spotify.com/track/t"

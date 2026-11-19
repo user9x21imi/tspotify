@@ -47,3 +47,11 @@ python scripts/check_spectrum_isolation.py
 The check creates its own null sink, sends two different tones to two separate streams, and confirms that the per-stream monitor contains only the selected tone. It never changes the default sink or connects the test sink to hardware, and removes its owned streams/module afterwards. Run only where PulseAudio/PipeWire and `pactl`, `parec`, `paplay` are available.
 
 Desktop control uses an authenticated localhost endpoint in `control.py`, with private, ephemeral `DATA/control.json` metadata. Never include that token/file in bundles. KDE registration in `shortcuts.py` is opt-in, checks existing ownership and releases its F7–F12 bindings on normal client exit. Commands enter the UI event queue and share the same coalesced volume worker as mouse and keyboard input. Test with a mock receiver to avoid changing audible playback.
+
+## Native engine v5 regression coverage
+
+The embedded engine publishes raw librespot player events through local `state` IPC. Position timestamps are stable across mode and volume events; track identity and mode changes come from the native player, rather than the Web API's delayed cached snapshot. Local `shuffle` and `repeat` preserve mode options on subsequent loads. UDP input accepts up to 65,507 bytes so a 100-track JSON queue is not silently truncated at 4,096 bytes.
+
+The pinned librespot-connect 0.8.0 source is vendored with a patch that ignores empty `track_uri` / `track_uid` selectors, allowing the actual UID/index sent by another Connect device to select the requested track. CI exercises these selectors with three Rust regression tests. This is not a substitute for a physical phone end-to-end test.
+
+Silent account verification on Linux: a 100-track liked queue loaded successfully, shuffle toggled both ways and advanced within the queue, repeat cycled off/context/track and repeat-one restarted the same track after seeking near its end. Audio volume stayed zero; saved session bytes were unchanged.

@@ -2,6 +2,11 @@
 
 ## 0.1.0
 
+- Native engine v5 applies shuffle and all repeat modes through local Connect controls and exposes authoritative player state.
+- Fix truncated 100-track queue commands and upstream empty-selector handling for phone Connect selections.
+- Add clickable Share, clipboard links for tracks/collections, and an explicit explanation of Spotify Jam API limitations.
+- Keep shuffle/repeat buttons visible in compact and expanded playback views.
+
 - Search inside an open playlist/album instantly by track, artist or album; F2 keeps global Spotify search available.
 - Filtering keeps the original playback queue, and clearing the field/Esc restores all collection tracks.
 
