@@ -3,12 +3,18 @@
         if command == "capabilities" {
             return Ok(serde_json::to_vec(&serde_json::json!({
                 "protocol": 1, "local_volume": true, "local_seek": true,
-                "local_transport": true, "local_load": true, "local_queue": true, "native_state": true, "local_modes": true, "engine": "tspotify-librespot"
+                "local_transport": true, "local_load": true, "local_queue": true, "native_state": true, "local_modes": true, "native_queue": true, "engine": "tspotify-librespot"
             }))?);
         }
         #[cfg(feature = "streaming")]
         if command == "state" {
-            return Ok(serde_json::to_vec(&*self.tspotify_state.lock())?);
+            let mut state = self.tspotify_state.lock().clone();
+            if let Some(spirc) = self.stream_conn.lock().as_ref() {
+                if let Some(queue) = spirc.tspotify_queue().as_object() {
+                    for (key, value) in queue { state[key] = value.clone(); }
+                }
+            }
+            return Ok(serde_json::to_vec(&state)?);
         }
         #[cfg(feature = "streaming")]
         {

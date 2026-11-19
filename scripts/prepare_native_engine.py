@@ -106,12 +106,12 @@ def prepare(destination, archive=None):
         )
     )
     cargo = crate / "Cargo.toml"
-    cargo.write_text(cargo.read_text().replace('version = "0.25.2"', 'version = "0.25.2+tspotify.5"', 1))
+    cargo.write_text(cargo.read_text().replace('version = "0.25.2"', 'version = "0.25.2+tspotify.6"', 1))
     lock = destination / "Cargo.lock"
     old = 'name = "spotify_player"\nversion = "0.25.2"'
     assert old in lock.read_text()
     lock.write_text(
-        lock.read_text().replace(old, 'name = "spotify_player"\nversion = "0.25.2+tspotify.5"', 1)
+        lock.read_text().replace(old, 'name = "spotify_player"\nversion = "0.25.2+tspotify.6"', 1)
     )
     # Backport the upstream Connect fix: an empty URI must not override a real UID/index.
     expected = "4b2a21e9e19b906c6676b1a515fc5529d5414f69049f5a167dfb2ea3206e5a27"
@@ -145,6 +145,51 @@ def prepare(destination, archive=None):
         1,
     )
     model.write_text(body)
+    spirc = vendor / "src/spirc.rs"
+    body = spirc.read_text()
+    field = "    tspotify_queue: Arc<std::sync::Mutex<serde_json::Value>>,\n"
+    body = body.replace("struct SpircTask {\n", "struct SpircTask {\n" + field, 1)
+    body = body.replace("pub struct Spirc {\n", "pub struct Spirc {\n" + field, 1)
+    body = body.replace(
+        "        let mut task = SpircTask {",
+        "        let tspotify_queue = Arc::new(std::sync::Mutex::new(serde_json::json!({})));\n        let mut task = SpircTask {\n            tspotify_queue: tspotify_queue.clone(),",
+        1,
+    )
+    body = body.replace(
+        "let spirc = Spirc { commands: cmd_tx };",
+        "let spirc = Spirc { commands: cmd_tx, tspotify_queue };",
+        1,
+    )
+    body = body.replace(
+        "impl Spirc {\n",
+        "impl Spirc {\n    pub fn tspotify_queue(&self) -> serde_json::Value { self.tspotify_queue.lock().unwrap().clone() }\n",
+        1,
+    )
+    body = body.replace(
+        "            let commands = self.commands.as_mut();",
+        """            let p = self.connect_state.player();
+            *self.tspotify_queue.lock().unwrap() = serde_json::json!({
+                "queue_current_uri": p.track.uri,
+                "next_uris": p.next_tracks.iter().take(20).map(|t| t.uri.clone()).collect::<Vec<_>>(),
+                "context_uri": p.context_uri,
+                "queue_ended": self.connect_state.is_active() && !p.track.uri.is_empty() && matches!(self.play_status, SpircPlayStatus::Stopped),
+            });
+            let commands = self.commands.as_mut();""",
+        1,
+    )
+    # Remote Resume already reloads from Stopped; local Play/Next must do so too.
+    body = body.replace(
+        "SpircCommand::Play => self.handle_play(),",
+        "SpircCommand::Play if matches!(self.play_status, SpircPlayStatus::Stopped) => self.load_track(true, 0)?,\n            SpircCommand::Play => self.handle_play(),",
+        1,
+    )
+    body = body.replace(
+        "SpircCommand::Next => self.handle_next(None)?,",
+        "SpircCommand::Next if matches!(self.play_status, SpircPlayStatus::Stopped) => self.load_track(true, 0)?,\n            SpircCommand::Next => self.handle_next(None)?,",
+        1,
+    )
+    assert "SpircCommand::Play if" in body and "SpircCommand::Next if" in body
+    spirc.write_text(body)
     workspace = destination / "Cargo.toml"
     workspace.write_text(
         workspace.read_text()
