@@ -13,6 +13,7 @@ from . import paths
 from .api import RateLimited
 from .art import cover, logo, thumbnail, image_url, cached_cover
 from .audio import Audio
+from .terminal import TerminalTitle
 
 HOME = paths.HOME
 CACHE = paths.BACKEND_CACHE
@@ -1991,7 +1992,9 @@ class App:
         dirty = True
         mouse_tracking = False
         controls = None
+        title = TerminalTitle()
         try:
+            title.update(self.playback)
             if not DEMO_MODE:
                 from .control import ControlServer
 
@@ -2017,6 +2020,7 @@ class App:
                 self.splash()
             while self.running:
                 dirty = self.drain() or dirty
+                title.update(self.playback)
                 now = time.monotonic()
                 self.audio.enabled = (self.show_spectrum or self.fullscreen) and not (
                     self.help or self.layout_editor or self.share_dialog
@@ -2043,6 +2047,7 @@ class App:
                 except curses.error:
                     pass
         finally:
+            title.close()
             if controls:
                 controls.close()
             self.checkpoint()
