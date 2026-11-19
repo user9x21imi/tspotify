@@ -3,8 +3,12 @@
         if command == "capabilities" {
             return Ok(serde_json::to_vec(&serde_json::json!({
                 "protocol": 1, "local_volume": true, "local_seek": true,
-                "local_transport": true, "local_load": true, "local_queue": true, "native_state": true, "local_modes": true, "native_queue": true, "engine": "tspotify-librespot"
+                "local_transport": true, "local_load": true, "local_queue": true, "native_state": true, "local_modes": true, "native_queue": true, "native_jam": true, "engine": "tspotify-librespot"
             }))?);
+        }
+        #[cfg(feature = "streaming")]
+        if command.starts_with("jam-") {
+            return self.tspotify_jam_control(command);
         }
         #[cfg(feature = "streaming")]
         if command == "state" {

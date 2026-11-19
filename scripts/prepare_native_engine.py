@@ -81,6 +81,7 @@ def prepare(destination, archive=None):
         1,
     )
     native = (Path(__file__).resolve().parents[1] / "engine/native_state.rs").read_text()
+    native += (Path(__file__).resolve().parents[1] / "engine/jam.rs").read_text()
     text = text.replace("impl AppClient {\n", "impl AppClient {\n" + native, 1)
     text += (Path(__file__).resolve().parents[1] / "engine/connect_tests.rs").read_text()
     implementation.write_text(text)
@@ -106,12 +107,12 @@ def prepare(destination, archive=None):
         )
     )
     cargo = crate / "Cargo.toml"
-    cargo.write_text(cargo.read_text().replace('version = "0.25.2"', 'version = "0.25.2+tspotify.6"', 1))
+    cargo.write_text(cargo.read_text().replace('version = "0.25.2"', 'version = "0.25.2+tspotify.7"', 1))
     lock = destination / "Cargo.lock"
     old = 'name = "spotify_player"\nversion = "0.25.2"'
     assert old in lock.read_text()
     lock.write_text(
-        lock.read_text().replace(old, 'name = "spotify_player"\nversion = "0.25.2+tspotify.6"', 1)
+        lock.read_text().replace(old, 'name = "spotify_player"\nversion = "0.25.2+tspotify.7"', 1)
     )
     # Backport the upstream Connect fix: an empty URI must not override a real UID/index.
     expected = "4b2a21e9e19b906c6676b1a515fc5529d5414f69049f5a167dfb2ea3206e5a27"
