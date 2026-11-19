@@ -49,7 +49,7 @@ if os.name == "nt":
             except EOFError:
                 return
             output.append(text)
-            if "tspotify" in "".join(output):
+            if "DEMO / NO AUDIO" in "".join(output):
                 seen.set()
 
     threading.Thread(target=read, daemon=True).start()
@@ -87,7 +87,7 @@ else:
             output.append(data.decode(errors="replace"))
             if b"\x1b[6n" in data:
                 os.write(master, b"\x1b[1;1R")
-            if "tspotify" in "".join(output):
+            if "DEMO / NO AUDIO" in "".join(output):
                 seen.set()
 
     threading.Thread(target=read, daemon=True).start()
