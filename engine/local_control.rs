@@ -3,22 +3,32 @@
         if command == "capabilities" {
             return Ok(serde_json::to_vec(&serde_json::json!({
                 "protocol": 1, "local_volume": true, "local_seek": true,
-                "local_transport": true, "local_load": true, "local_queue": true, "engine": "tspotify-librespot"
+                "local_transport": true, "local_load": true, "local_queue": true, "native_state": true, "local_modes": true, "engine": "tspotify-librespot"
             }))?);
+        }
+        #[cfg(feature = "streaming")]
+        if command == "state" {
+            return Ok(serde_json::to_vec(&*self.tspotify_state.lock())?);
         }
         #[cfg(feature = "streaming")]
         {
             let connection = self.stream_conn.lock();
             let spirc = connection.as_ref().context("Integrated playback is still connecting")?;
             if let Some(json) = command.strip_prefix("load:") {
-                use librespot_connect::{LoadRequest, LoadRequestOptions, PlayingTrack};
+                use librespot_connect::{LoadRequest, LoadRequestOptions, LoadContextOptions, Options, PlayingTrack};
                 let payload: serde_json::Value = serde_json::from_str(json)?;
                 let uri = payload["uri"].as_str().context("Missing track URI")?;
                 anyhow::ensure!(uri.starts_with("spotify:track:") && uri.len() == 36, "Invalid track URI");
+                let modes = self.tspotify_state.lock().clone();
+                let repeat = modes["desired_repeat"].as_str().or_else(|| modes["repeat_state"].as_str()).unwrap_or("off");
                 let options = LoadRequestOptions {
                     start_playing: true,
                     seek_to: value.clamp(0, u32::MAX as i64) as u32,
                     playing_track: Some(PlayingTrack::Uri(uri.to_owned())),
+                    context_options: Some(LoadContextOptions::Options(Options {
+                        shuffle: modes["desired_shuffle"].as_bool().or_else(|| modes["shuffle_state"].as_bool()).unwrap_or(false),
+                        repeat: repeat == "context", repeat_track: repeat == "track",
+                    })),
                     ..Default::default()
                 };
                 let tracks: Vec<String> = payload["uris"].as_array().map(|entries| entries.iter().take(100)
@@ -45,6 +55,15 @@
                 "play-pause" => spirc.play_pause()?,
                 "next" => spirc.next()?,
                 "previous" => spirc.prev()?,
+                "shuffle" => {
+                    self.tspotify_state.lock()["desired_shuffle"] = serde_json::json!(value != 0);
+                    spirc.shuffle(value != 0)?;
+                },
+                "repeat" => {
+                    self.tspotify_state.lock()["desired_repeat"] = serde_json::json!(if value == 2 { "track" } else if value == 1 { "context" } else { "off" });
+                    spirc.repeat(value == 1)?;
+                    spirc.repeat_track(value == 2)?;
+                },
                 _ => anyhow::bail!("Unsupported local control: {command}"),
             }
             return Ok(serde_json::to_vec(&serde_json::json!({"accepted": true, "local": true}))?);
