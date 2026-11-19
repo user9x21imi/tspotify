@@ -2,6 +2,8 @@
 
 ## 0.1.0
 
+- Closing Share/Jam dialogs preserves the expanded player and underlying layout; background animation cannot draw over modal dialogs.
+
 - Native engine v5 applies shuffle and all repeat modes through local Connect controls and exposes authoritative player state.
 - Fix truncated 100-track queue commands and upstream empty-selector handling for phone Connect selections.
 - Add clickable Share, clipboard links for tracks/collections, and an explicit explanation of Spotify Jam API limitations.

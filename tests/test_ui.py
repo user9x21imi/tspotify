@@ -1181,3 +1181,41 @@ def test_share_selected_playlist_and_current_track_have_different_links(app, mon
     app.key("\x1b")
     app.key("y")
     assert app.share_dialog[2] == "https://open.spotify.com/track/t"
+
+
+@pytest.mark.parametrize("expanded", [False, True])
+def test_share_escape_closes_only_dialog_and_preserves_player(app, monkeypatch, expanded):
+    monkeypatch.setattr(app, "copy_share", lambda: None)
+    app.fullscreen = expanded
+    original_order = list(app.order)
+    original_selected = app.selected
+    app.key("y")
+    app.render()
+    app.key("\x1b")
+    assert app.share_dialog is None
+    assert app.fullscreen is expanded
+    assert app.order == original_order and app.selected == original_selected
+    if expanded:
+        app.key("\x1b")
+        assert not app.fullscreen
+
+
+def test_share_dialog_blocks_background_animation(app, monkeypatch):
+    monkeypatch.setattr(app, "copy_share", lambda: None)
+    app.fullscreen = True
+    app.key("y")
+    app.render()
+    before = list(app.s.calls)
+    app.animate()
+    assert app.s.calls == before
+
+
+def test_share_close_mouse_button_returns_to_fullscreen_player(app, monkeypatch):
+    monkeypatch.setattr(app, "copy_share", lambda: None)
+    app.fullscreen = True
+    app.key("y")
+    app.render()
+    y, x, _, _, _, _ = next(hit for hit in app.hits if hit[4:] == ("key", "\x1b"))
+    monkeypatch.setattr(curses, "getmouse", lambda: (0, x, y, 0, curses.BUTTON1_CLICKED))
+    app.key(curses.KEY_MOUSE)
+    assert app.share_dialog is None and app.fullscreen

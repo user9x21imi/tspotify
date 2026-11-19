@@ -1189,7 +1189,7 @@ class App:
         self.spectrum_area = (y + 1, 4, height - 2, w - 8)
 
     def animate(self):
-        if self.help or self.layout_editor:
+        if self.help or self.layout_editor or self.share_dialog:
             return
         if (self.show_spectrum or self.fullscreen) and getattr(self, "spectrum_area", None):
             self.spectrum(*self.spectrum_area)
@@ -1801,6 +1801,13 @@ class App:
         if k == curses.KEY_MOUSE:
             self.mouse()
             return
+        if k != curses.KEY_RESIZE and k not in VOLUME_FUNCTION_KEYS and k not in TRANSPORT_FUNCTION_KEYS:
+            if getattr(self, "share_dialog", None):
+                if k in ("\x1b", "q", "\n", "\r"):
+                    self.share_dialog = None
+                elif k == "c":
+                    self.copy_share()
+                return
         if k == curses.KEY_F3:
             self.leave_search_layout()
             self.fullscreen = not self.fullscreen
@@ -1855,12 +1862,6 @@ class App:
             elif k in ("\n", "\r", curses.KEY_ENTER, "s"):
                 self.save_layout()
                 self.layout_editor = False
-            return
-        if getattr(self, "share_dialog", None):
-            if k in ("\x1b", "q", "\n", "\r"):
-                self.share_dialog = None
-            elif k == "c":
-                self.copy_share()
             return
         if self.help:
             if k in (curses.KEY_UP, curses.KEY_DOWN):
@@ -2018,7 +2019,7 @@ class App:
                 dirty = self.drain() or dirty
                 now = time.monotonic()
                 self.audio.enabled = (self.show_spectrum or self.fullscreen) and not (
-                    self.help or self.layout_editor
+                    self.help or self.layout_editor or self.share_dialog
                 )
                 self.prefetch_nearby()
                 self.update_live_search()
