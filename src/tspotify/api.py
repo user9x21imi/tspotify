@@ -618,15 +618,12 @@ class Spotify:
                     "Spotify не создал Jam: " + str(jam.get("message", "неизвестная ошибка"))[:240]
                 )
             if jam.get("status") == "ready":
-                from urllib.parse import urlparse
+                from .sharing import jam_invite_url
 
-                url = jam.get("url", "")
-                parsed = urlparse(url)
-                if parsed.scheme != "https" or not (
-                    parsed.hostname in ("spotify.link", "spotify.com", "open.spotify.com")
-                    or (parsed.hostname or "").endswith(".spotify.link")
-                ):
-                    raise SpotifyError("Spotify вернул неизвестный адрес приглашения Jam")
+                try:
+                    url = jam_invite_url(jam.get("url", ""))
+                except ValueError as error:
+                    raise SpotifyError(str(error)) from None
                 return {"url": url, "members": jam.get("members") or []}
             time.sleep(0.15)
         raise SpotifyError("Spotify не подтвердил создание Jam за 22 секунды")

@@ -83,6 +83,7 @@ with single_instance():
         assert state.get("volume_percent", 0) == 0
         results["audio_volume"] = 0
         if args.jam:
+            api.control("pause")
             jam = api.start_jam()
             results["jam_real_invite_returned"] = bool(jam.get("url"))
             results["jam_members_count"] = len(jam.get("members") or [])

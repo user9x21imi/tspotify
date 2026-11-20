@@ -56,3 +56,30 @@ def copy_link(url):
         except (OSError, subprocess.TimeoutExpired):
             continue
     return "Буфер обмена недоступен. Скопируйте ссылку ниже выделением в терминале (Shift + мышь)"
+
+
+def jam_invite_url(url):
+    """Turn Spotify's actual internal join URL into its public social-session route."""
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    if (
+        parsed.scheme == "hm"
+        and parsed.netloc == "social-connect"
+        and not parsed.query
+        and not parsed.fragment
+    ):
+        match = re.fullmatch(r"/v2/sessions/join/([A-Za-z0-9_-]{8,512})", parsed.path)
+        if match:
+            return "https://open.spotify.com/socialsession/" + match[1]
+    if (
+        parsed.scheme == "https"
+        and not parsed.username
+        and not parsed.password
+        and (
+            parsed.hostname in ("spotify.link", "spotify.app.link", "spotify.com", "open.spotify.com")
+            or (parsed.hostname or "").endswith(".spotify.link")
+        )
+    ):
+        return url
+    raise ValueError("Spotify вернул неизвестный адрес приглашения Jam")

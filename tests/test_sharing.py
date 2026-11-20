@@ -25,3 +25,19 @@ def test_macos_clipboard_uses_stdin_not_shell_interpolation(monkeypatch):
     assert "скопирована" in sharing.copy_link("https://open.spotify.com/track/abc")
     assert calls[0][0] == (["pbcopy"],)
     assert calls[0][1]["input"] == "https://open.spotify.com/track/abc"
+
+
+def test_internal_jam_join_token_uses_spotify_public_socialsession_route():
+    assert (
+        sharing.jam_invite_url("hm://social-connect/v2/sessions/join/abcdefgh12345678")
+        == "https://open.spotify.com/socialsession/abcdefgh12345678"
+    )
+    import pytest
+
+    for value in (
+        "https://bad.example/invite",
+        "hm://social-connect/v2/sessions/info/abcdefgh12345678",
+        "hm://social-connect/v2/sessions/join/../credentials",
+    ):
+        with pytest.raises(ValueError):
+            sharing.jam_invite_url(value)
