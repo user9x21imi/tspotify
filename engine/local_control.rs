@@ -18,6 +18,20 @@
                     for (key, value) in queue { state[key] = value.clone(); }
                 }
             }
+            if !state["queue_current_uri"].as_str().unwrap_or("").is_empty() {
+                if !state["actual_shuffle"].is_null() {
+                    state["shuffle_state"] = state["actual_shuffle"].clone();
+                    if state["desired_shuffle"] == state["actual_shuffle"] {
+                        state.as_object_mut().unwrap().remove("desired_shuffle");
+                    }
+                }
+                if !state["actual_repeat"].is_null() {
+                    state["repeat_state"] = state["actual_repeat"].clone();
+                    if state["desired_repeat"] == state["actual_repeat"] {
+                        state.as_object_mut().unwrap().remove("desired_repeat");
+                    }
+                }
+            }
             return Ok(serde_json::to_vec(&state)?);
         }
         #[cfg(feature = "streaming")]

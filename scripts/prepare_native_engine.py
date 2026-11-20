@@ -107,12 +107,12 @@ def prepare(destination, archive=None):
         )
     )
     cargo = crate / "Cargo.toml"
-    cargo.write_text(cargo.read_text().replace('version = "0.25.2"', 'version = "0.25.2+tspotify.7"', 1))
+    cargo.write_text(cargo.read_text().replace('version = "0.25.2"', 'version = "0.25.2+tspotify.8"', 1))
     lock = destination / "Cargo.lock"
     old = 'name = "spotify_player"\nversion = "0.25.2"'
     assert old in lock.read_text()
     lock.write_text(
-        lock.read_text().replace(old, 'name = "spotify_player"\nversion = "0.25.2+tspotify.7"', 1)
+        lock.read_text().replace(old, 'name = "spotify_player"\nversion = "0.25.2+tspotify.8"', 1)
     )
     # Backport the upstream Connect fix: an empty URI must not override a real UID/index.
     expected = "4b2a21e9e19b906c6676b1a515fc5529d5414f69049f5a167dfb2ea3206e5a27"
@@ -171,6 +171,8 @@ def prepare(destination, archive=None):
         """            let p = self.connect_state.player();
             *self.tspotify_queue.lock().unwrap() = serde_json::json!({
                 "queue_current_uri": p.track.uri,
+                "actual_shuffle": self.connect_state.shuffling_context(),
+                "actual_repeat": if self.connect_state.repeat_track() { "track" } else if self.connect_state.repeat_context() { "context" } else { "off" },
                 "next_uris": p.next_tracks.iter().take(20).map(|t| t.uri.clone()).collect::<Vec<_>>(),
                 "context_uri": p.context_uri,
                 "queue_ended": self.connect_state.is_active() && !p.track.uri.is_empty() && matches!(self.play_status, SpircPlayStatus::Stopped),
