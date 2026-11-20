@@ -651,15 +651,48 @@ class Spotify:
         if command in ("next", "previous", "pause", "play-pause"):
             self.cancel_start()
         self.ensure_engine()
-        if command in ("play", "play-pause") and self.idle and not self.external:
+        if command in ("play", "play-pause", "next", "previous") and self.idle and not self.external:
             snapshot = self.playback()
             item = snapshot.get("item") or {}
             if item.get("id") and self.idle:
-                return self.start(item, position_ms=snapshot.get("progress_ms") or 0)
+                position = snapshot.get("progress_ms") or 0
+                duration = item.get("duration_ms") or 0
+                if duration and position >= duration - 1000:
+                    position = 0
+                if command in ("next", "previous"):
+                    queue = item.get("_queue_uris") or []
+                    context_uri = item.get("_context_uri") or ""
+                    if not context_uri and (item.get("album") or {}).get("id"):
+                        context_uri = "spotify:album:" + item["album"]["id"]
+                    if not queue and context_uri:
+                        parts = context_uri.split(":")
+                        if len(parts) == 3 and parts[1] in ("album", "playlist"):
+                            context = self.context(parts[1], parts[2], "")
+                            entries = [track_from_entry(t) for t in context.get("tracks", [])]
+                            entries = [t for t in entries if t]
+                            self.remember_tracks(entries)
+                            queue = ["spotify:track:" + t["id"] for t in entries]
+                    uri = "spotify:track:" + item["id"]
+                    if queue and uri in queue:
+                        index = (queue.index(uri) + (1 if command == "next" else -1)) % len(queue)
+                        identity = queue[index].removeprefix("spotify:track:")
+                        first = max(0, index - 20) if len(queue) > 100 else 0
+                        item = {**self.track_metadata(identity), "_queue_uris": queue[first : first + 100]}
+                        if context_uri:
+                            item["_context_uri"] = context_uri
+                    position = 0
+                return self.start(item, position_ms=position)
             if item.get("id"):
                 # A phone/Connect event superseded the saved session during observation.
-                return self._control("pause" if snapshot.get("is_playing") else "play")
-            raise SpotifyError("Выберите трек в библиотеке, чтобы начать воспроизведение")
+                return self._control(
+                    command
+                    if command in ("next", "previous")
+                    else "pause"
+                    if snapshot.get("is_playing")
+                    else "play"
+                )
+            if command in ("play", "play-pause"):
+                raise SpotifyError("Выберите трек в библиотеке, чтобы начать воспроизведение")
         local = self.local_controls
         device = "" if local else self.device_query()
         if command == "play-pause":
@@ -715,6 +748,11 @@ class Spotify:
                 self.backend.local_control("repeat", modes.index(target))
                 message = "Повтор: " + {"off": "выключен", "context": "список", "track": "один трек"}[target]
             self.last_playback = self.backend.playback(state)
+            if getattr(self.backend, "native_snapshot", {}).get("queue_current_uri"):
+                deadline = time.monotonic() + 0.4
+                while self.last_playback.get("modes_pending") and time.monotonic() < deadline:
+                    time.sleep(0.005)
+                    self.last_playback = self.backend.playback(self.last_playback)
             if self.last_playback.get("modes_pending"):
                 message += " · ожидает применения"
             return message

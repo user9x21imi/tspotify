@@ -837,11 +837,16 @@ class App:
             column += len(text) + 1
 
     def mode_buttons(self, y, w, x=3):
-        repeat = {"off": "выкл", "context": "список", "track": "1 трек"}.get(
-            self.playback.get("repeat_state", "off"), "выкл"
-        )
+        mode = self.playback.get("repeat_state", "off")
+        repeat = {"off": "выкл", "context": "список", "track": "1 трек"}.get(mode, "выкл")
         shuffle = "вкл" if self.playback.get("shuffle_state") else "выкл"
-        self.button_row(y, w, [(f"[s Shuffle: {shuffle}]", "s"), (f"[r Повтор: {repeat}]", "r")], x=x)
+        if w - x - 2 >= 38:
+            self.button(y, x, f"[s Shuffle: {shuffle}]", "s")
+            self.button(y, x + 20, f"[r Повтор: {repeat}]", "r")
+        else:
+            short_repeat = {"off": "—", "context": "все", "track": "1"}.get(mode, "—")
+            self.button(y, x, f"[s ⇄ {shuffle}]", "s")
+            self.button(y, x + 12, f"[r ↻ {short_repeat}]", "r")
 
     def mouse(self):
         self.mouse_changed = False
@@ -1252,20 +1257,7 @@ class App:
         if height >= 17:
             device = (self.playback.get("device") or {}).get("name", "tspotify")
             self.put(y + 8, x, "Устройство: " + device, 4, width=width)
-            self.button_row(
-                y + 9,
-                x + width + 2,
-                [
-                    (
-                        "[s ⇄ "
-                        + ("Перемешивание" if self.playback.get("shuffle_state") else "По порядку")
-                        + "]",
-                        "s",
-                    ),
-                    ("[r ↻ " + str(self.playback.get("repeat_state", "off")) + "]", "r"),
-                ],
-                x=x,
-            )
+            self.mode_buttons(y + 9, x + width + 2, x=x)
 
     def render_spectrum(self, y, w, height):
         self.hit(y, 1, height, w - 2, "panel", "spectrum")

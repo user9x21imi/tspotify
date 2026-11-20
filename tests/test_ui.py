@@ -1318,3 +1318,18 @@ def test_jam_error_replaces_loading_dialog(app, monkeypatch):
     settle(app)
     assert app.share_dialog[2] == ""
     assert "Denied by Spotify" in app.share_dialog[1]
+
+
+@pytest.mark.parametrize("size", [(24, 78), (30, 110), (48, 140), (72, 100), (40, 240)])
+@pytest.mark.parametrize("repeat", ["off", "context", "track"])
+def test_shuffle_and_repeat_buttons_remain_visible_after_resize(app, size, repeat):
+    app.fullscreen = True
+    app.s.size = size
+    app.playback.update(repeat_state=repeat, shuffle_state=True)
+    app.render()
+    for key in ("s", "r"):
+        hit = next(hit for hit in app.hits if hit[4:] == ("key", key))
+        assert hit[0] < size[0] and hit[1] + hit[3] < size[1]
+    app.s.size = (48, 160)
+    app.render()
+    assert any(hit[4:] == ("key", "r") for hit in app.hits)

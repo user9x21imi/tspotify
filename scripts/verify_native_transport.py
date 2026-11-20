@@ -47,12 +47,34 @@ with single_instance():
         assert len(tracks) == 3 and all(duration(t) > 5000 for t in tracks), "Need three cached tracks"
         api.remember_tracks(tracks)
         uris = ["spotify:track:" + t["id"] for t in tracks]
+        # Modes chosen before a stream exists must be applied on its first load.
+        api.control("shuffle")
+        api.control("shuffle")
+        for _ in range(3):
+            api.control("repeat")
         api.start({**tracks[0], "_queue_uris": uris})
         wait(
             lambda s: s.get("is_playing") and (s.get("next_uris") or [None])[0] == uris[1],
             "Actual next track",
         )
         results["next_label_matches_queue"] = True
+        initial = backend.read_native_state()
+        assert initial.get("shuffle_state") is False and initial.get("repeat_state") == "off"
+        assert "desired_repeat" not in initial and "desired_shuffle" not in initial
+        results["preload_modes_confirmed_after_load"] = True
+        for expected in (True, False, True, False):
+            api.control("shuffle")
+            wait(
+                lambda s, goal=expected: s.get("shuffle_state") is goal and "desired_shuffle" not in s,
+                "Shuffle confirmation",
+            )
+        for expected in ("context", "track", "off") * 3:
+            api.control("repeat")
+            wait(
+                lambda s, goal=expected: s.get("repeat_state") == goal and "desired_repeat" not in s,
+                "Repeat confirmation",
+            )
+        results["rapid_shuffle_and_repeat"] = True
         api.control("seek", duration(tracks[0]) - 1300)
         wait(
             lambda s: s.get("is_playing") and s.get("track_uri") == uris[1], "Natural transition at track end"

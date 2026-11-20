@@ -762,3 +762,49 @@ def test_jam_server_rejection_is_not_reported_as_created(api, monkeypatch):
     monkeypatch.setattr(api, "ensure_engine", lambda: None)
     with pytest.raises(SpotifyError, match="Forbidden"):
         api.start_jam()
+
+
+@pytest.mark.parametrize("position,expected", [(180000, 0), (179500, 0), (12000, 12000)])
+def test_restored_end_position_does_not_resume_final_millisecond(api, monkeypatch, position, expected):
+    item = {"id": "a", "duration_ms": 180000}
+    monkeypatch.setattr(api, "ensure_engine", lambda: None)
+    monkeypatch.setattr(api, "playback", lambda: {"item": item, "progress_ms": position})
+    calls = []
+    monkeypatch.setattr(api, "start", lambda *a, **kw: calls.append((a, kw)))
+    api.control("play-pause")
+    assert calls == [((item,), {"position_ms": expected})]
+
+
+def test_next_from_restored_session_selects_actual_next_cached_track(api, monkeypatch):
+    tracks = [{"id": "a", "type": "track"}, {"id": "b", "type": "track"}]
+    api.remember_tracks(tracks)
+    item = {"id": "a", "_queue_uris": ["spotify:track:a", "spotify:track:b"]}
+    monkeypatch.setattr(api, "ensure_engine", lambda: None)
+    monkeypatch.setattr(api, "playback", lambda: {"item": item, "progress_ms": 180000})
+    calls = []
+    monkeypatch.setattr(api, "start", lambda *a, **kw: calls.append((a, kw)))
+    api.control("next")
+    assert calls[0][0][0]["id"] == "b" and calls[0][1]["position_ms"] == 0
+
+
+def test_repeat_waits_through_intermediate_native_confirmation(api, monkeypatch):
+    states = iter(
+        [
+            {"repeat_state": "context"},
+            {"repeat_state": "track", "modes_pending": True},
+            {"repeat_state": "track", "modes_pending": False},
+        ]
+    )
+    calls = []
+    api.backend = SimpleNamespace(
+        local_enabled=True,
+        local_modes=True,
+        native_snapshot={"queue_current_uri": "spotify:track:a"},
+        local_control=lambda *args: calls.append(args),
+        playback=lambda _: next(states),
+    )
+    monkeypatch.setattr(api, "ensure_engine", lambda: None)
+    monkeypatch.setattr(time, "sleep", lambda _: None)
+    assert "ожидает" not in api.control("repeat")
+    assert calls == [("repeat", 2)]
+    assert api.last_playback["repeat_state"] == "track"

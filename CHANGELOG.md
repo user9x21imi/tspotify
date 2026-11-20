@@ -2,6 +2,10 @@
 
 ## 0.1.0
 
+- Keep shuffle/repeat buttons visible at stable positions across resizes and compact panels.
+- Confirm the final applied mode instead of clearing repeat intent on intermediate native events.
+- Restart saved end-of-track positions at zero and restore the actual queue for Next/Previous after startup.
+
 - Use consistent timeline colors in full redraws and animated frames, eliminating the flashing full-width green bar.
 - Adapt the main window to side-by-side playback/library panels in wide terminals.
 
