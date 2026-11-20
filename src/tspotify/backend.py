@@ -129,6 +129,7 @@ class Backend:
         self.native_state = False
         self.local_modes = False
         self.native_jam = False
+        self.atomic_modes = False
         self.native_snapshot = {}
         self.confirmed_volume = 0
         self._volume_set_at = 0.0
@@ -311,6 +312,7 @@ audio_cache = true
             self.native_state = bool(capabilities.get("native_state"))
             self.local_modes = bool(capabilities.get("local_modes"))
             self.native_jam = bool(capabilities.get("native_jam"))
+            self.atomic_modes = bool(capabilities.get("atomic_modes"))
         except (OSError, RuntimeError, AttributeError):
             self.local_enabled = False
         if self.local_enabled and not self.external:

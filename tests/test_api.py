@@ -765,8 +765,14 @@ def test_jam_server_rejection_is_not_reported_as_created(api, monkeypatch):
 
 
 @pytest.mark.parametrize("position,expected", [(180000, 0), (179500, 0), (12000, 12000)])
-def test_restored_end_position_does_not_resume_final_millisecond(api, monkeypatch, position, expected):
-    item = {"id": "a", "duration_ms": 180000}
+@pytest.mark.parametrize("legacy_duration", [False, True])
+def test_restored_end_position_does_not_resume_final_millisecond(
+    api, monkeypatch, position, expected, legacy_duration
+):
+    item = {
+        "id": "a",
+        **({"duration": {"secs": 180, "nanos": 0}} if legacy_duration else {"duration_ms": 180000}),
+    }
     monkeypatch.setattr(api, "ensure_engine", lambda: None)
     monkeypatch.setattr(api, "playback", lambda: {"item": item, "progress_ms": position})
     calls = []
@@ -808,3 +814,42 @@ def test_repeat_waits_through_intermediate_native_confirmation(api, monkeypatch)
     assert "ожидает" not in api.control("repeat")
     assert calls == [("repeat", 2)]
     assert api.last_playback["repeat_state"] == "track"
+
+
+def test_repeat_does_not_accept_old_snapshot_even_if_pending_flag_cleared(api, monkeypatch):
+    states = iter(
+        [
+            {"repeat_state": "off"},
+            {"repeat_state": "off", "modes_pending": False},
+            {"repeat_state": "context", "modes_pending": False},
+        ]
+    )
+    api.backend = SimpleNamespace(
+        local_enabled=True,
+        local_modes=True,
+        native_snapshot={"queue_current_uri": "spotify:track:a"},
+        local_control=lambda *args: None,
+        playback=lambda _: next(states),
+    )
+    monkeypatch.setattr(api, "ensure_engine", lambda: None)
+    monkeypatch.setattr(time, "sleep", lambda _: None)
+    api.control("repeat")
+    assert api.last_playback["repeat_state"] == "context"
+
+
+def test_atomic_modes_return_pending_target_without_waiting_for_streaming_loop(api, monkeypatch):
+    states = iter([{"repeat_state": "off"}, {"repeat_state": "context", "modes_pending": True}])
+    api.backend = SimpleNamespace(
+        local_enabled=True,
+        local_modes=True,
+        atomic_modes=True,
+        native_snapshot={"queue_current_uri": "spotify:track:a"},
+        local_control=lambda *args: None,
+        playback=lambda _: next(states),
+    )
+    monkeypatch.setattr(api, "ensure_engine", lambda: None)
+    monkeypatch.setattr(
+        time, "sleep", lambda _: pytest.fail("Atomic mode commands must not wait for native playback")
+    )
+    assert "ожидает" in api.control("repeat")
+    assert api.last_playback["repeat_state"] == "context"

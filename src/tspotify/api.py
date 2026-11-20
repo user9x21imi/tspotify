@@ -657,6 +657,10 @@ class Spotify:
             if item.get("id") and self.idle:
                 position = snapshot.get("progress_ms") or 0
                 duration = item.get("duration_ms") or 0
+                if not duration and isinstance(item.get("duration"), dict):
+                    duration = (
+                        item["duration"].get("secs", 0) * 1000 + item["duration"].get("nanos", 0) // 1000000
+                    )
                 if duration and position >= duration - 1000:
                     position = 0
                 if command in ("next", "previous"):
@@ -748,12 +752,21 @@ class Spotify:
                 self.backend.local_control("repeat", modes.index(target))
                 message = "Повтор: " + {"off": "выключен", "context": "список", "track": "один трек"}[target]
             self.last_playback = self.backend.playback(state)
-            if getattr(self.backend, "native_snapshot", {}).get("queue_current_uri"):
+            if not getattr(self.backend, "atomic_modes", False) and getattr(
+                self.backend, "native_snapshot", {}
+            ).get("queue_current_uri"):
                 deadline = time.monotonic() + 0.4
-                while self.last_playback.get("modes_pending") and time.monotonic() < deadline:
+                field = "shuffle_state" if command == "shuffle" else "repeat_state"
+                while (
+                    self.last_playback.get("modes_pending") or self.last_playback.get(field) != target
+                ) and time.monotonic() < deadline:
                     time.sleep(0.005)
                     self.last_playback = self.backend.playback(self.last_playback)
-            if self.last_playback.get("modes_pending"):
+            if (
+                self.last_playback.get("modes_pending")
+                or self.last_playback.get("shuffle_state" if command == "shuffle" else "repeat_state")
+                != target
+            ):
                 message += " · ожидает применения"
             return message
         if local and command in ("next", "previous", "play", "pause"):

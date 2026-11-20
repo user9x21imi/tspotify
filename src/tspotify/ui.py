@@ -1075,7 +1075,7 @@ class App:
                 "spectrum": spectrum_h,
             }
             order = ["search", "library", "player", "spectrum"]
-        wide = h >= 30 and w >= 140 and w >= 2 * h and not self.search_layout
+        wide = h >= 30 and w >= 110 and w >= 2 * h and not self.search_layout
         if wide:
             left_w = w // 2 - 1
             body_h = h - 8

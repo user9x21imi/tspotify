@@ -1,6 +1,7 @@
 """Opt-in real-account transport verification. Always silent; never saves preferences."""
 
 import argparse
+import concurrent.futures
 import json
 import time
 
@@ -52,12 +53,19 @@ with single_instance():
         api.control("shuffle")
         for _ in range(3):
             api.control("repeat")
-        api.start({**tracks[0], "_queue_uris": uris})
+        api.last_playback = {
+            "item": {**tracks[0], "_queue_uris": uris},
+            "progress_ms": duration(tracks[0]),
+            "is_playing": False,
+        }
+        api.control("play-pause")
         wait(
             lambda s: s.get("is_playing") and (s.get("next_uris") or [None])[0] == uris[1],
             "Actual next track",
         )
         results["next_label_matches_queue"] = True
+        assert backend.read_native_state().get("position_ms", 99999) < 5000
+        results["restored_end_starts_at_zero"] = True
         initial = backend.read_native_state()
         assert initial.get("shuffle_state") is False and initial.get("repeat_state") == "off"
         assert "desired_repeat" not in initial and "desired_shuffle" not in initial
@@ -80,6 +88,15 @@ with single_instance():
                 "Repeat confirmation",
             )
         results["rapid_shuffle_and_repeat"] = True
+        for _ in range(6):
+            started = time.monotonic()
+            api.control("repeat")
+            mode_timings.append((time.monotonic() - started) * 1000)
+        wait(
+            lambda s: s.get("repeat_state") == "off" and "desired_repeat" not in s,
+            "Back-to-back repeat burst preserves the final target",
+        )
+        results["queued_repeat_burst"] = True
         results["max_mode_command_ms"] = round(max(mode_timings), 2)
         api.control("repeat")
         api.control("repeat")
@@ -124,7 +141,13 @@ with single_instance():
         results["audio_volume"] = 0
         if args.jam:
             api.control("pause")
-            jam = api.start_jam()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                pending_jam = pool.submit(api.start_jam)
+                time.sleep(0.03)
+                started = time.monotonic()
+                backend.local_control("volume", 0)
+                results["volume_during_jam_ms"] = round((time.monotonic() - started) * 1000, 2)
+                jam = pending_jam.result(timeout=25)
             results["jam_real_invite_returned"] = bool(jam.get("url"))
             results["jam_members_count"] = len(jam.get("members") or [])
         api.control("pause")

@@ -1265,7 +1265,9 @@ def test_expanded_timeline_unfilled_color_matches_animated_frame(app, monkeypatc
     assert rendered == animated
 
 
-@pytest.mark.parametrize("size,wide", [((72, 100), False), ((48, 160), True), ((30, 140), True)])
+@pytest.mark.parametrize(
+    "size,wide", [((72, 100), False), ((48, 160), True), ((30, 140), True), ((45, 120), True)]
+)
 def test_main_screen_uses_columns_only_in_wide_windows(app, size, wide):
     app.s.size = size
     order = list(app.order)
