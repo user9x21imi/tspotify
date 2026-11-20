@@ -107,12 +107,12 @@ def prepare(destination, archive=None):
         )
     )
     cargo = crate / "Cargo.toml"
-    cargo.write_text(cargo.read_text().replace('version = "0.25.2"', 'version = "0.25.2+tspotify.8"', 1))
+    cargo.write_text(cargo.read_text().replace('version = "0.25.2"', 'version = "0.25.2+tspotify.9"', 1))
     lock = destination / "Cargo.lock"
     old = 'name = "spotify_player"\nversion = "0.25.2"'
     assert old in lock.read_text()
     lock.write_text(
-        lock.read_text().replace(old, 'name = "spotify_player"\nversion = "0.25.2+tspotify.8"', 1)
+        lock.read_text().replace(old, 'name = "spotify_player"\nversion = "0.25.2+tspotify.9"', 1)
     )
     # Backport the upstream Connect fix: an empty URI must not override a real UID/index.
     expected = "4b2a21e9e19b906c6676b1a515fc5529d5414f69049f5a167dfb2ea3206e5a27"
@@ -192,6 +192,52 @@ def prepare(destination, archive=None):
         1,
     )
     assert "SpircCommand::Play if" in body and "SpircCommand::Next if" in body
+    body = body.replace(
+        "    Play,\n", "    Play,\n    TspotifyMode { name: String, value: i64, revision: u64 },\n", 1
+    )
+    body = body.replace("struct SpircTask {\n", "struct SpircTask {\n    tspotify_mode_revision: u64,\n", 1)
+    body = body.replace(
+        "        let mut task = SpircTask {\n",
+        "        let mut task = SpircTask {\n            tspotify_mode_revision: 0,\n",
+        1,
+    )
+    body = body.replace(
+        "impl Spirc {\n",
+        """impl Spirc {
+    pub fn tspotify_mode(&self, name: &str, value: i64, revision: u64) -> Result<(), Error> {
+        Ok(self.commands.send(SpircCommand::TspotifyMode { name: name.to_owned(), value, revision })?)
+    }
+""",
+        1,
+    )
+    body = body.replace(
+        '"queue_current_uri": p.track.uri,',
+        '"queue_current_uri": p.track.uri, "applied_mode_revision": self.tspotify_mode_revision,',
+        1,
+    )
+    anchor = "            SpircCommand::Shutdown => {"
+    assert anchor in body
+    body = body.replace(
+        anchor,
+        """            SpircCommand::TspotifyMode { name, value, revision } => {
+                if name == "shuffle" {
+                    if self.connect_state.is_active() { self.handle_shuffle(value != 0)?; }
+                    else { self.connect_state.set_shuffle(value != 0); }
+                } else {
+                    if self.connect_state.is_active() {
+                        self.handle_repeat_context(value == 1);
+                        self.handle_repeat_track(value == 2);
+                    } else {
+                        self.connect_state.set_repeat_context(value == 1);
+                        self.connect_state.set_repeat_track(value == 2);
+                    }
+                }
+                self.tspotify_mode_revision = revision;
+            },
+"""
+        + anchor,
+        1,
+    )
     spirc.write_text(body)
     workspace = destination / "Cargo.toml"
     workspace.write_text(

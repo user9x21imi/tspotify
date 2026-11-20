@@ -43,16 +43,10 @@
             }
             E::ShuffleChanged { shuffle } => {
                 state["shuffle_state"] = serde_json::json!(shuffle);
-                if state["desired_shuffle"].as_bool() == Some(*shuffle) {
-                    state.as_object_mut().unwrap().remove("desired_shuffle");
-                }
             },
             E::RepeatChanged { context, track } => {
                 let mode = if *track { "track" } else if *context { "context" } else { "off" };
                 state["repeat_state"] = serde_json::json!(mode);
-                if state["desired_repeat"].as_str() == Some(mode) {
-                    state.as_object_mut().unwrap().remove("desired_repeat");
-                }
             }
             E::VolumeChanged { volume } => {
                 state["volume_percent"] = serde_json::json!((u32::from(*volume) * 100 + 32767) / 65535);
