@@ -23,12 +23,20 @@
                     state["shuffle_state"] = state["actual_shuffle"].clone();
                     if state["desired_shuffle"] == state["actual_shuffle"] {
                         state.as_object_mut().unwrap().remove("desired_shuffle");
+                        let mut shared = self.tspotify_state.lock();
+                        if shared["desired_shuffle"] == state["actual_shuffle"] {
+                            shared.as_object_mut().unwrap().remove("desired_shuffle");
+                        }
                     }
                 }
                 if !state["actual_repeat"].is_null() {
                     state["repeat_state"] = state["actual_repeat"].clone();
                     if state["desired_repeat"] == state["actual_repeat"] {
                         state.as_object_mut().unwrap().remove("desired_repeat");
+                        let mut shared = self.tspotify_state.lock();
+                        if shared["desired_repeat"] == state["actual_repeat"] {
+                            shared.as_object_mut().unwrap().remove("desired_repeat");
+                        }
                     }
                 }
             }
