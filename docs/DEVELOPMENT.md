@@ -55,3 +55,9 @@ The embedded engine publishes raw librespot player events through local `state` 
 The pinned librespot-connect 0.8.0 source is vendored with a patch that ignores empty `track_uri` / `track_uid` selectors, allowing the actual UID/index sent by another Connect device to select the requested track. CI exercises these selectors with three Rust regression tests. This is not a substitute for a physical phone end-to-end test.
 
 Silent account verification on Linux: a 100-track liked queue loaded successfully, shuffle toggled both ways and advanced within the queue, repeat cycled off/context/track and repeat-one restarted the same track after seeking near its end. Audio volume stayed zero; saved session bytes were unchanged.
+
+## Native modes and Jam
+
+Engine v9 queues each repeat transition atomically and publishes the applied mode revision with its native options. Local IPC keeps the latest requested target until the corresponding revision is applied, so fast clicks cannot consume an intermediate state or lose a target. The frontend returns the requested state immediately and polls actual application independently. Silent verification exercises modes before first load, rapid repeat bursts, repeat-one wrapping at the real end, natural/manual queue transitions, and the 100-track command.
+
+Jam creation uses the authenticated native session and Spotify's internal social-connect endpoint asynchronously; bearer tokens are never exported to Python. The server-issued internal join route is converted to Spotify's public socialsession URL. Creation and link retrieval were tested; a guest account joining was not. These internal endpoints are not a public Web API contract.

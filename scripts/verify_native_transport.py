@@ -44,7 +44,8 @@ with single_instance():
         api.backend, api.device_id = backend, backend.device_id
         cache = json.loads((paths.BACKEND_CACHE / "SavedTracks_cache.json").read_text())
         tracks = [track_from_entry(x) for x in (cache.values() if isinstance(cache, dict) else cache)]
-        tracks = [t for t in tracks if t and len(t["id"]) == 22][8:11]
+        all_tracks = [t for t in tracks if t and len(t["id"]) == 22]
+        tracks = all_tracks[8:11]
         assert len(tracks) == 3 and all(duration(t) > 5000 for t in tracks), "Need three cached tracks"
         api.remember_tracks(tracks)
         uris = ["spotify:track:" + t["id"] for t in tracks]
@@ -137,6 +138,13 @@ with single_instance():
             lambda s: s.get("is_playing") and s.get("track_uri") == uris[0], "Next restarts ended queue"
         )
         results["next_after_queue_end"] = True
+        if len(all_tracks) >= 100:
+            api.start({**tracks[0], "_queue_uris": ["spotify:track:" + t["id"] for t in all_tracks[:100]]})
+            state = wait(
+                lambda s: s.get("is_playing") and s.get("track_uri") == uris[0],
+                "Load a 100-track liked queue",
+            )
+            results["liked_queue_100"] = True
         assert state.get("volume_percent", 0) == 0
         results["audio_volume"] = 0
         if args.jam:
