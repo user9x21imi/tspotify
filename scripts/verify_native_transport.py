@@ -62,19 +62,37 @@ with single_instance():
         assert initial.get("shuffle_state") is False and initial.get("repeat_state") == "off"
         assert "desired_repeat" not in initial and "desired_shuffle" not in initial
         results["preload_modes_confirmed_after_load"] = True
+        mode_timings = []
         for expected in (True, False, True, False):
+            started = time.monotonic()
             api.control("shuffle")
+            mode_timings.append((time.monotonic() - started) * 1000)
             wait(
                 lambda s, goal=expected: s.get("shuffle_state") is goal and "desired_shuffle" not in s,
                 "Shuffle confirmation",
             )
         for expected in ("context", "track", "off") * 3:
+            started = time.monotonic()
             api.control("repeat")
+            mode_timings.append((time.monotonic() - started) * 1000)
             wait(
                 lambda s, goal=expected: s.get("repeat_state") == goal and "desired_repeat" not in s,
                 "Repeat confirmation",
             )
         results["rapid_shuffle_and_repeat"] = True
+        results["max_mode_command_ms"] = round(max(mode_timings), 2)
+        api.control("repeat")
+        api.control("repeat")
+        api.control("seek", duration(tracks[0]) - 1300)
+        wait(lambda s: s.get("position_ms", 0) > duration(tracks[0]) - 3000, "Seek near end for repeat-one")
+        wait(
+            lambda s: (
+                s.get("is_playing") and s.get("track_uri") == uris[0] and s.get("position_ms", 99999) < 5000
+            ),
+            "Repeat-one wraps to zero",
+        )
+        results["repeat_one_actual_end_wrap"] = True
+        api.control("repeat")
         api.control("seek", duration(tracks[0]) - 1300)
         wait(
             lambda s: s.get("is_playing") and s.get("track_uri") == uris[1], "Natural transition at track end"
