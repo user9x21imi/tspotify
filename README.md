@@ -31,7 +31,15 @@ A keyboard-driven Spotify client with **colored dotted artwork**, tiny playlist 
 
 ## Install
 
-Native release downloads are not published yet. Install from source using **Python 3.11 or newer** with `venv` and `pip` available. The commands below install into your user directory without root/admin access or Git.
+**[DOWNLOAD · Linux / SteamOS preview · x86_64](https://github.com/user9x21imi/tspotify/releases/download/v0.1.0/tspotify-linux-x86_64.zip)**
+
+The native archive includes Python, dependencies and the patched streaming engine. Extract it and run `./tspotify/tspotify` in your terminal. Spotify Desktop is not required. This preview is tested on SteamOS x86_64 with glibc 2.43; run `./tspotify/tspotify verify-runtime` to check your system. Native macOS/Windows packages are not supplied in this preview.
+
+For ttools integration, the release also provides [install.py](https://github.com/user9x21imi/tspotify/releases/download/v0.1.0/install.py) and the SHA-256 [update manifest](https://github.com/user9x21imi/tspotify/releases/download/v0.1.0/update.json).
+
+### Source installation
+
+Use **Python 3.11 or newer** with `venv` and `pip` available. The commands below install into your user directory without root/admin access or Git. Source installs use an upstream engine unless a patched build is supplied; the native local controls and Jam require tspotify's patched engine. The Linux archive above includes it.
 
 **Linux / macOS** — paste these three commands into your terminal:
 
@@ -49,7 +57,7 @@ py -3 -m venv "$env:LOCALAPPDATA\tspotify\venv"
 & "$env:LOCALAPPDATA\tspotify\venv\Scripts\tspotify.exe"
 ```
 
-To launch again, use the last command for your OS. Add `--demo` to preview the interface offline without an account or audio. Add `--muted` for a silent start. Integrated playback requires Spotify Premium; the verified streaming engine downloads on first use.
+To launch again, use the last command for your OS. Add `--demo` to preview the interface offline without an account or audio. Add `--muted` for a silent start. Integrated playback requires Spotify Premium. Source installations download a verified upstream streaming engine on first use; native archives already include their engine.
 
 <details><summary>Development installation</summary>
 
